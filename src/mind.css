@@ -1,0 +1,183 @@
+/* Mind window. Colours, fonts and pixel parts come from theme.css. */
+:root {
+  --need: var(--good);
+  --trait: var(--accent-2);
+  --bond: #e0708a;
+  --inhibit: var(--bad);
+}
+
+main {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+  gap: 16px;
+  padding: 12px;
+  height: calc(100vh - 24px);
+  box-sizing: border-box;
+}
+
+@media (max-width: 820px) {
+  main {
+    grid-template-columns: 1fr;
+    height: auto;
+  }
+}
+
+section,
+aside {
+  padding: 12px 16px;
+  min-height: 0;
+}
+
+aside {
+  overflow-y: auto;
+}
+
+h1 {
+  font-size: 32px;
+  margin: 0;
+}
+h2 {
+  margin: 14px 0 6px;
+}
+aside h2:first-child {
+  margin-top: 0;
+}
+.muted {
+  color: var(--muted);
+}
+#why {
+  margin: 2px 0 6px;
+}
+.legend {
+  font-size: 11px;
+  margin: 4px 0 0;
+}
+
+svg {
+  width: 100%;
+  height: auto;
+  max-height: calc(100vh - 150px);
+  display: block;
+}
+
+svg text {
+  fill: var(--text);
+  font-size: 12px;
+}
+
+.edge {
+  fill: none;
+  stroke: var(--line);
+  opacity: 0.9;
+}
+.edge.active {
+  stroke: var(--accent);
+}
+.edge.inhibit {
+  stroke: var(--inhibit);
+  stroke-dasharray: 4 3;
+  opacity: 0.6;
+}
+.edge.know {
+  stroke: var(--line);
+  stroke-width: 2;
+}
+
+.factor .track {
+  fill: var(--line);
+}
+.factor.need .value {
+  fill: var(--need);
+}
+.factor.trait .value {
+  fill: var(--trait);
+}
+.factor.bond .value {
+  fill: var(--bond);
+}
+.factor.goal .value {
+  fill: var(--accent);
+}
+.factor.time .value {
+  fill: var(--muted);
+}
+
+.option circle {
+  fill: var(--line);
+  stroke: var(--muted);
+  stroke-width: 1;
+  transition: r 0.4s ease;
+}
+.option.current circle {
+  fill: var(--accent);
+  stroke: var(--accent);
+  filter: drop-shadow(0 0 6px var(--accent));
+}
+.option.current text {
+  font-weight: 700;
+}
+.option .score {
+  fill: var(--muted);
+  font-size: 10px;
+}
+
+.pet-node circle {
+  fill: var(--accent);
+  stroke: var(--text);
+  stroke-width: 2;
+}
+.pet-node .pet-name {
+  font-family: var(--pixel);
+  font-size: 16px;
+  fill: var(--accent-ink);
+}
+.pet-node .pet-state {
+  font-size: 11px;
+  fill: var(--accent-ink);
+}
+
+.knowledge rect {
+  fill: var(--bg);
+  stroke: var(--line);
+}
+
+ol,
+ul {
+  margin: 0;
+  padding-left: 18px;
+}
+#thoughts {
+  list-style: none;
+  padding: 0;
+}
+#thoughts li {
+  padding: 3px 0;
+  border-bottom: 2px dashed var(--line);
+}
+#thoughts time {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  margin-right: 6px;
+}
+
+.beliefs {
+  list-style: none;
+  padding: 0;
+}
+.beliefs > li {
+  padding: 4px 0;
+  border-bottom: 2px dashed var(--line);
+}
+.beliefs details summary {
+  font-size: 12px;
+  font-family: var(--body-font);
+}
+.thinking-now {
+  color: var(--accent);
+  animation: blink 1s steps(2) infinite;
+}
+@keyframes blink {
+  50% {
+    opacity: 0.4;
+  }
+}

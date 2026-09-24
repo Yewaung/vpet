@@ -1,0 +1,112 @@
+/* The pet window keeps its own colours: it floats over any desktop. */
+:root {
+  --scale: 4;
+  --pet-opacity: 1;
+}
+
+html,
+body {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent !important;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+#stage {
+  position: absolute;
+  inset: 0;
+  cursor: grab;
+  touch-action: none;
+}
+
+#stage:active {
+  cursor: grabbing;
+}
+
+/* 64x64 sprite scaled by a whole number (Settings > Appearance) with hard pixel edges. */
+canvas {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  width: calc(64px * var(--scale));
+  height: calc(64px * var(--scale));
+  transform: translateX(-50%);
+  image-rendering: pixelated;
+  opacity: var(--pet-opacity);
+}
+
+/* ---------- pixel speech bubble ---------- */
+#bubble {
+  position: absolute;
+  top: 6px;
+  left: 50%;
+  transform: translateX(-50%);
+  max-width: calc(100% - 16px);
+  opacity: max(var(--pet-opacity), 0.7);
+  padding: 3px 8px;
+  background: #fffdf8;
+  color: #261c2e;
+  font: 16px/1 "Rainyhearts", Consolas, monospace;
+  white-space: normal;
+  text-align: center;
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  pointer-events: none;
+  z-index: 2;
+  /* Stepped pixel border: square corners cut by one "pixel". */
+  box-shadow:
+    0 -3px 0 0 #261c2e,
+    0 3px 0 0 #261c2e,
+    -3px 0 0 0 #261c2e,
+    3px 0 0 0 #261c2e;
+}
+#bubble::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  bottom: -9px;
+  width: 6px;
+  height: 6px;
+  margin-left: -3px;
+  background: #261c2e;
+  box-shadow: 0 -3px 0 0 #fffdf8;
+}
+#bubble.pop {
+  animation: bubble-pop 0.2s steps(3);
+}
+.icon-heart,
+.icon-anger {
+  color: #e0445e;
+}
+@keyframes bubble-pop {
+  from { transform: translateX(-50%) scale(0.5); }
+  to { transform: translateX(-50%) scale(1); }
+}
+
+/* Typed text and a hidden full copy share one cell, so the bubble keeps its size. */
+#bubble .text {
+  display: inline-grid;
+}
+#bubble .text > span {
+  grid-area: 1 / 1;
+}
+#bubble .ghost {
+  visibility: hidden;
+}
+
+/* Speed-run badge (testing). */
+#speed {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  padding: 0 4px 2px;
+  font-size: 16px;
+  color: #fff;
+  background: #d4455c;
+  pointer-events: none;
+  z-index: 3;
+}

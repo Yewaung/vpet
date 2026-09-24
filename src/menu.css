@@ -1,0 +1,62 @@
+/* Pixel right-click menu: a transparent window holding one pixel panel. */
+
+html,
+body {
+  background: transparent !important;
+  overflow: hidden;
+  user-select: none;
+}
+body {
+  padding: 8px;
+  box-sizing: border-box;
+}
+
+#menu {
+  display: flex;
+  flex-direction: column;
+  padding: 4px 0 6px;
+}
+
+.title {
+  padding: 2px 12px 6px;
+  font-size: 16px;
+  color: var(--accent);
+  border-bottom: 3px solid var(--ink);
+  margin-bottom: 4px;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 3px 12px 5px;
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  box-shadow: none;
+}
+.item:hover:not(:disabled),
+.item:focus-visible {
+  background: var(--accent);
+  color: var(--accent-ink);
+  outline: none;
+  filter: none;
+}
+.item:active:not(:disabled) {
+  transform: none;
+  box-shadow: none;
+}
+.item .icon {
+  width: 18px;
+  text-align: center;
+  font-family: "Segoe UI Emoji", var(--clear);
+  font-size: 13px;
+}
+
+hr {
+  width: calc(100% - 16px);
+  border: none;
+  border-top: 3px dotted var(--line);
+  margin: 4px 8px;
+}

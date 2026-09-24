@@ -1,0 +1,49 @@
+[package]
+name = "vpet"
+description = "AI desktop virtual pet"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+name = "vpet_app_lib"
+crate-type = ["rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+vpet-core = { path = "../crates/vpet-core" }
+vpet-storage = { path = "../crates/vpet-storage" }
+vpet-llm = { path = "../crates/vpet-llm" }
+tauri = { version = "2", features = ["tray-icon"] }
+serde.workspace = true
+serde_json.workspace = true
+# Network client: used ONLY by src/netgate.rs, behind the user's permission.
+ureq = "3"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
+
+[target.'cfg(windows)'.dependencies]
+# Speakers' peak level (audio_win.rs) and offline text recognition of a
+# screen the user chose to share (ocr_win.rs).
+windows = { version = "0.62", features = [
+    "Foundation",
+    "Globalization",
+    "Graphics_Imaging",
+    "Media_Ocr",
+    "Storage_Streams",
+    "Win32_System_WinRT",
+    "Win32_Media_Audio",
+    "Win32_Media_Audio_Endpoints",
+    "Win32_System_Com",
+    "Win32_System_Com_StructuredStorage",
+    "Win32_System_Variant",
+] }
+windows-sys = { version = "0.61", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_SystemInformation",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }

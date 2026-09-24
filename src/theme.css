@@ -1,0 +1,315 @@
+/* Shared retro pixel theme for every window.
+   Rainyhearts (by Camellina, free) is a 16px bitmap font: it is only used at
+   16px or 32px so it stays crisp. "Readable" mode (the default) keeps long
+   text in the system font; "pixel" mode uses Rainyhearts everywhere. */
+
+@font-face {
+  font-family: "Rainyhearts";
+  src: url("./assets/rainyhearts.ttf") format("truetype");
+  font-display: block;
+}
+
+:root {
+  --px: 4px; /* one "pixel" of border */
+  --pixel: "Rainyhearts", "Consolas", monospace;
+  --clear: "Segoe UI", system-ui, sans-serif;
+  --body-font: var(--clear);
+  --body-size: 14px;
+
+  /* Light: cream paper, ink outlines, amber accents. */
+  --bg: #efe6d2;
+  --panel: #fbf6ea;
+  --panel-2: #f3ead6;
+  --ink: #2b2230;
+  --text: #2b2230;
+  --muted: #6f6477;
+  --line: #d8ccb2;
+  --accent: #e0902f;
+  --accent-ink: #2b2230;
+  --accent-2: #3a9e98;
+  --good: #4f9d5d;
+  --mid: #d9a53a;
+  --bad: #d4455c;
+  --shade: rgba(43, 34, 48, 0.14);
+  --focus: #3a9e98;
+  color-scheme: light;
+}
+
+/* Dark: a retro terminal. Used when Windows is dark, unless the user picked light. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14121c;
+    --panel: #1f1b2b;
+    --panel-2: #29243a;
+    --ink: #07060b;
+    --text: #ece6f5;
+    --muted: #a198b3;
+    --line: #3b3450;
+    --accent: #f5b443;
+    --accent-ink: #14121c;
+    --accent-2: #58d0c9;
+    --good: #7bd88f;
+    --mid: #f5c95c;
+    --bad: #ff6b81;
+    --shade: rgba(0, 0, 0, 0.35);
+    --focus: #58d0c9;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14121c;
+  --panel: #1f1b2b;
+  --panel-2: #29243a;
+  --ink: #07060b;
+  --text: #ece6f5;
+  --muted: #a198b3;
+  --line: #3b3450;
+  --accent: #f5b443;
+  --accent-ink: #14121c;
+  --accent-2: #58d0c9;
+  --good: #7bd88f;
+  --mid: #f5c95c;
+  --bad: #ff6b81;
+  --shade: rgba(0, 0, 0, 0.35);
+  --focus: #58d0c9;
+  color-scheme: dark;
+}
+
+:root[data-font="pixel"] {
+  --body-font: var(--pixel);
+  --body-size: 16px;
+}
+
+html,
+body {
+  background: var(--bg);
+  color: var(--text);
+}
+body {
+  margin: 0;
+  font: var(--body-size) / 1.45 var(--body-font);
+}
+
+/* Headings, labels and controls are always pixel. */
+h1,
+h2,
+h3,
+button,
+label,
+.tab,
+.pixel,
+summary {
+  font-family: var(--pixel);
+  font-weight: normal;
+  letter-spacing: 0.5px;
+}
+h1 {
+  font-size: 32px;
+  line-height: 1;
+  margin: 0 0 6px;
+}
+h2 {
+  font-size: 16px;
+  margin: 0 0 8px;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+h3 {
+  font-size: 16px;
+  margin: 12px 0 4px;
+}
+button,
+label,
+summary {
+  font-size: 16px;
+}
+
+.muted {
+  color: var(--muted);
+}
+
+/* A panel with a stepped pixel outline (square corners cut by one pixel). */
+.px-box {
+  background: var(--panel);
+  margin: var(--px);
+  box-shadow:
+    0 calc(-1 * var(--px)) 0 0 var(--ink),
+    0 var(--px) 0 0 var(--ink),
+    calc(-1 * var(--px)) 0 0 0 var(--ink),
+    var(--px) 0 0 0 var(--ink),
+    inset 0 calc(-1 * var(--px)) 0 0 var(--shade);
+}
+
+button {
+  position: relative;
+  padding: 4px 14px 6px;
+  margin: 4px;
+  border: none;
+  border-radius: 0;
+  background: var(--accent);
+  color: var(--accent-ink);
+  cursor: pointer;
+  box-shadow:
+    0 -3px 0 0 var(--ink),
+    0 3px 0 0 var(--ink),
+    -3px 0 0 0 var(--ink),
+    3px 0 0 0 var(--ink),
+    inset 0 -3px 0 0 var(--shade);
+}
+button:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+button:active:not(:disabled) {
+  transform: translateY(2px);
+  box-shadow:
+    0 -3px 0 0 var(--ink),
+    0 3px 0 0 var(--ink),
+    -3px 0 0 0 var(--ink),
+    3px 0 0 0 var(--ink),
+    inset 0 3px 0 0 var(--shade);
+}
+button.secondary {
+  background: var(--panel-2);
+  color: var(--text);
+}
+button.danger {
+  background: var(--bad);
+  color: #fff;
+}
+button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+button:focus-visible,
+input:focus-visible,
+.tab:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+input[type="text"],
+input:not([type]),
+input[type="search"] {
+  padding: 6px 8px;
+  border: none;
+  border-radius: 0;
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  box-shadow:
+    0 -3px 0 0 var(--ink),
+    0 3px 0 0 var(--ink),
+    -3px 0 0 0 var(--ink),
+    3px 0 0 0 var(--ink),
+    inset 0 3px 0 0 var(--shade);
+  margin: 3px;
+}
+
+/* Pixel on/off switch built on a checkbox. */
+.switch {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 8px;
+  cursor: pointer;
+}
+.switch input {
+  appearance: none;
+  flex: none;
+  width: 36px;
+  height: 18px;
+  margin: 3px;
+  background: var(--panel-2);
+  cursor: pointer;
+  position: relative;
+  box-shadow:
+    0 -3px 0 0 var(--ink),
+    0 3px 0 0 var(--ink),
+    -3px 0 0 0 var(--ink),
+    3px 0 0 0 var(--ink);
+}
+.switch input::after {
+  content: "";
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 12px;
+  height: 12px;
+  background: var(--muted);
+  transition: left 0.12s steps(3);
+}
+.switch input:checked {
+  background: var(--good);
+}
+.switch input:checked::after {
+  left: 21px;
+  background: var(--panel);
+}
+
+/* Segmented pixel bar. */
+.bar {
+  height: 12px;
+  background: var(--panel-2);
+  box-shadow:
+    0 -2px 0 0 var(--ink),
+    0 2px 0 0 var(--ink),
+    -2px 0 0 0 var(--ink),
+    2px 0 0 0 var(--ink);
+  margin: 2px;
+  overflow: hidden;
+}
+.fill {
+  height: 100%;
+  background-image: repeating-linear-gradient(90deg, transparent 0 8px, var(--shade) 8px 10px);
+  transition: width 0.6s steps(8);
+}
+.fill.low {
+  background-color: var(--bad);
+}
+.fill.mid {
+  background-color: var(--mid);
+}
+.fill.high {
+  background-color: var(--good);
+}
+
+input[type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+/* Tabs across the top of a window. */
+.tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 10px 12px 0;
+}
+.tab {
+  background: var(--panel-2);
+  color: var(--muted);
+  font-size: 16px;
+  padding: 4px 10px 6px;
+}
+.tab[aria-selected="true"] {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+
+::-webkit-scrollbar {
+  width: 12px;
+}
+::-webkit-scrollbar-track {
+  background: var(--panel-2);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border: 3px solid var(--panel-2);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  * {
+    transition: none !important;
+    animation: none !important;
+  }
+}

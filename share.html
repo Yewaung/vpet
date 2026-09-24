@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Share a screen</title>
+    <link rel="stylesheet" href="/src/theme.css" />
+    <link rel="stylesheet" href="/src/share.css" />
+  </head>
+  <body>
+    <main>
+      <section class="px-box">
+        <h1>Share a screen</h1>
+        <p>Let your pet look at a screen, window or tab <strong>you choose</strong>, to learn words and notice what you're doing.</p>
+        <ul class="muted">
+          <li>Every 15 seconds it reads the text on it, using Windows' built-in text recognition on this computer. Nothing goes online.</li>
+          <li>Pictures are never saved. Only ordinary lower-case words reach your pet: names, numbers, links, e-mail addresses and codes are skipped.</li>
+          <li>A word sticks after it has seen it three times. Sharing stops when you press Stop or close this window.</li>
+        </ul>
+        <div class="row">
+          <button id="start">Choose what to share</button>
+          <button id="stop" class="secondary" hidden>Stop sharing</button>
+        </div>
+        <p id="state" class="pixel"></p>
+      </section>
+      <section class="px-box">
+        <h2>What it noticed</h2>
+        <ol id="log"></ol>
+      </section>
+    </main>
+    <script type="module" src="/src/share.ts"></script>
+  </body>
+</html>

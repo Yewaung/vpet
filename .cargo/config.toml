@@ -1,0 +1,5 @@
+# Dev-machine toolchain locations for building llama.cpp (llama-cpp-2).
+# Adjust if LLVM / VS Build Tools live elsewhere.
+[env]
+LIBCLANG_PATH = 'C:\Program Files\LLVM\bin'
+CMAKE = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe'

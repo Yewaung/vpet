@@ -1,0 +1,44 @@
+/* Screen sharing window. Colours, fonts and pixel parts come from theme.css. */
+
+main {
+  max-width: 520px;
+  margin: 0 auto;
+  padding: 8px 12px;
+}
+section {
+  padding: 12px 16px;
+  margin: 14px 4px;
+}
+h1 {
+  font-size: 32px;
+}
+ul {
+  padding-left: 18px;
+}
+.row {
+  display: flex;
+  gap: 8px;
+  margin-top: 8px;
+}
+#state {
+  font-size: 16px;
+  color: var(--accent);
+}
+#log {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  max-height: 220px;
+  overflow-y: auto;
+}
+#log li {
+  padding: 4px 0;
+  border-bottom: 2px dashed var(--line);
+}
+#log time {
+  color: var(--muted);
+  margin-right: 6px;
+}
+.error {
+  color: var(--bad);
+}

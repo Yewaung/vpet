@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>What is it thinking?</title>
+    <link rel="stylesheet" href="/src/theme.css" />
+    <link rel="stylesheet" href="/src/mind.css" />
+  </head>
+  <body>
+    <main>
+      <section class="graph px-box">
+        <h1 id="now"></h1>
+        <p id="why" class="muted"></p>
+        <svg id="graph" viewBox="0 0 680 560" role="img" aria-label="Decision graph"></svg>
+        <p class="legend muted">Left: what the pet feels and is like. Middle: options it is weighing (bigger = stronger urge).
+          Lines show what pushes each option; dashed red lines hold it back. Right: what it has learned.</p>
+      </section>
+      <aside class="px-box">
+        <h2>Its own mind</h2>
+        <div id="own-mind"></div>
+        <h2>Beliefs</h2>
+        <ul id="beliefs" class="beliefs"></ul>
+        <h2>Growing up</h2>
+        <div id="growth"></div>
+        <h2>Thought stream</h2>
+        <ol id="thoughts"></ol>
+        <h2>Knows</h2>
+        <p id="words" class="muted"></p>
+        <h2>Noticed about you</h2>
+        <ul id="interests"></ul>
+        <h2>Recent memories</h2>
+        <ul id="memories"></ul>
+      </aside>
+    </main>
+    <script type="module" src="/src/mind.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,42 @@
+/* Egg picker. Colours, fonts and pixel parts come from theme.css. */
+
+main {
+  max-width: 700px;
+  margin: 0 auto;
+  padding: 16px;
+}
+
+.eggs {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 18px;
+  margin-top: 16px;
+}
+
+.egg-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 12px 10px 14px;
+  background: var(--panel);
+  color: var(--text);
+}
+.egg-card:hover,
+.egg-card:focus-visible {
+  background: var(--panel-2);
+}
+.egg-card canvas {
+  width: 128px;
+  height: 128px;
+  image-rendering: pixelated;
+}
+.egg-card .name {
+  font-size: 16px;
+  color: var(--accent);
+}
+.egg-card .hint {
+  font-family: var(--body-font);
+  font-size: var(--body-size);
+  text-align: center;
+}

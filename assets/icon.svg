@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <radialGradient id="shell" cx="40%" cy="35%" r="70%">
+      <stop offset="0" stop-color="#fffaf0"/>
+      <stop offset="1" stop-color="#f1dcb8"/>
+    </radialGradient>
+  </defs>
+  <path d="M512 96C340 96 216 380 216 610c0 180 132 318 296 318s296-138 296-318C808 380 684 96 512 96z" fill="url(#shell)" stroke="#6b4f3a" stroke-width="36"/>
+  <ellipse cx="420" cy="420" rx="62" ry="48" fill="#8fc7d9"/>
+  <ellipse cx="620" cy="560" rx="80" ry="62" fill="#8fc7d9"/>
+  <ellipse cx="430" cy="720" rx="54" ry="42" fill="#8fc7d9"/>
+  <ellipse cx="400" cy="300" rx="44" ry="70" fill="#fff" opacity=".7" transform="rotate(-25 400 300)"/>
+</svg>
