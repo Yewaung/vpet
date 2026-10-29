@@ -1,0 +1,95 @@
+# Every push to main and every pull request: Rust tests and lints, the
+# TypeScript UI, and a GPU (Vulkan) build so the `gpu` feature never rots.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # The runner's CMake is on PATH; .cargo/config.toml points at a local
+  # Visual Studio Build Tools install, which CI doesn't have.
+  CMAKE: cmake
+
+jobs:
+  web:
+    name: Web UI (types and build)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx tsc --noEmit
+      - run: npx vite build
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Known vulnerabilities fail the build; "unmaintained" notices don't.
+      - run: cargo install cargo-audit --locked
+      - run: cargo audit
+      - run: npm audit --omit=dev
+
+  rust:
+    name: Rust tests and clippy
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      # Tauri embeds the built UI at compile time.
+      - run: npm ci
+      - run: npx vite build
+      - run: cargo clippy --workspace --all-targets -- -D warnings
+      - run: cargo test --workspace
+
+  gpu:
+    name: GPU (Vulkan) build
+    runs-on: windows-latest
+    # The same fixes as scripts/gpu.ps1: llama.cpp's nested shader-tool build
+    # needs the MSVC environment, the Ninja generator (the Visual Studio one
+    # races) and a short target folder (paths pass 260 characters otherwise).
+    env:
+      CARGO_TARGET_DIR: C:\vt
+      CMAKE_GENERATOR: Ninja
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: vulkan
+      - uses: ilammy/msvc-dev-cmd@v1.13.0
+      - uses: seanmiddleditch/gha-setup-ninja@v6
+      - uses: jakoch/install-vulkan-sdk-action@v1.6.0
+        with:
+          cache: true
+          install_runtime: true
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npx vite build
+      - run: cargo build -p vpet --features gpu
+      # CPU fallback and settings logic, compiled with GPU support in.
+      - run: cargo test -p vpet-llm --features vulkan

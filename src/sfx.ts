@@ -10,11 +10,13 @@ export interface SoundSettings {
   volume: number;
   /** The pet's beep pitch: high as a baby, lower as it grows. */
   pitch_hz: number;
+  /** Chime when it calls for help (the user may turn it off). */
+  chime: boolean;
 }
 
 type Wave = OscillatorType;
 
-let settings: SoundSettings = { enabled: true, volume: 0.6, pitch_hz: 1320 };
+let settings: SoundSettings = { enabled: true, volume: 0.6, pitch_hz: 1320, chime: true };
 let ctx: AudioContext | null = null;
 
 export function applySoundSettings(s: SoundSettings): void {
@@ -90,6 +92,8 @@ export const sfx = {
   happy: () => notes([p() * 0.8, p(), p() * 1.2], 0.06, 0.08),
   /** Wants something: the classic double alert beep. */
   alert: () => notes([p() * 1.5, p() * 1.5], 0.12, 0.08, "square", 0.06),
+  /** Time for a break: a soft, falling three-note chime. */
+  rest: () => notes([1046.5, 783.99, 659.25], 0.28, 0.5, "sine", 0.07),
   /** Refusing or annoyed: a low grumble. */
   refuse: () => tone(p() / 4, 0, 0.18, { wave: "sawtooth", to: p() / 6, gain: 0.07 }),
   /** Startled: a quick high chirp up. */
@@ -108,6 +112,11 @@ export const sfx = {
   hatch: () => notes([523, 659, 784, 1047, 1319], 0.08, 0.12),
   /** Growing into a new stage: the big fanfare. */
   evolve: () => notes([523.25, 659.25, 783.99, 1046.5, 1318.51, 1567.98, 2093], 0.08, 0.14, "square", 0.08),
+  /** Power gathering before an evolution: a long rising sweep. */
+  charge: () => {
+    tone(180, 0, 1.2, { wave: "triangle", to: 900, gain: 0.07 });
+    tone(360, 1.2, 2.4, { wave: "square", to: 1800, gain: 0.04 });
+  },
   /** Egg wobble when warmed. */
   wobble: () => tone(300, 0, 0.1, { wave: "triangle", to: 380, gain: 0.08 }),
 };

@@ -164,3 +164,255 @@ code {
   color: var(--bad);
   font-size: 16px;
 }
+
+/* Something the user should know right away (e.g. a repaired save file). */
+.notice {
+  border-left: 6px solid var(--bad);
+}
+
+.tips ul {
+  margin: 4px 0 0;
+  padding-left: 20px;
+}
+.tips li {
+  margin: 4px 0;
+}
+
+/* Growing up: one card per step, with before-and-after portraits. */
+.evolutions {
+  list-style: none;
+  padding: 0;
+  margin: 10px 0 0;
+}
+.evo {
+  padding: 10px 0;
+  border-top: 2px dashed var(--line);
+}
+.evo time {
+  color: var(--muted);
+  font-size: 12px;
+  margin-left: 6px;
+}
+.evo-portraits {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 6px 0;
+}
+.evo-portraits figure {
+  margin: 0;
+  text-align: center;
+}
+.evo-portraits figcaption {
+  color: var(--muted);
+  font-size: 16px;
+}
+.portrait {
+  width: 96px;
+  height: 96px;
+  image-rendering: pixelated;
+  background: var(--panel-2);
+}
+.evo-portraits .arrow {
+  font-size: 32px;
+  color: var(--accent);
+}
+.evo-name {
+  font-size: 32px;
+  line-height: 1;
+  color: var(--accent);
+}
+.reasons {
+  margin: 2px 0 0;
+  padding-left: 20px;
+}
+
+.hours {
+  margin-left: 46px;
+}
+select {
+  padding: 3px 6px;
+  border: none;
+  border-radius: 0;
+  background: var(--panel-2);
+  color: var(--text);
+  font: inherit;
+  box-shadow:
+    0 -3px 0 0 var(--ink),
+    0 3px 0 0 var(--ink),
+    -3px 0 0 0 var(--ink),
+    3px 0 0 0 var(--ink);
+  margin: 3px;
+}
+select:disabled {
+  opacity: 0.45;
+}
+select:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+/* Headings with a little pixel icon (icons.ts). */
+h2 .icon,
+.tag .icon,
+.search .icon {
+  vertical-align: -1px;
+  margin-right: 4px;
+}
+.icon {
+  flex: none;
+}
+
+/* The pet card: the live pet beside who it is, how it feels and its mind. */
+.pet-card {
+  display: grid;
+  grid-template-columns: 112px 1fr;
+  gap: 14px;
+  align-items: start;
+}
+.live-pet {
+  width: 112px;
+  height: 112px;
+  image-rendering: pixelated;
+  background: var(--panel-2);
+}
+.pet-card h1 {
+  margin: 0 0 4px;
+  color: var(--accent);
+  line-height: 1;
+}
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 2px 0 6px;
+}
+.tag {
+  padding: 0 6px 2px;
+  background: var(--panel-2);
+  font-family: var(--pixel);
+  font-size: 16px;
+}
+.tag.mind {
+  background: var(--accent);
+  color: var(--accent-ink);
+}
+.tag.hot {
+  background: var(--bad);
+  color: #fff;
+}
+.feeling-line .icon {
+  vertical-align: -1px;
+  color: var(--accent);
+}
+.thinking-line {
+  font-size: 12px;
+}
+.thinking-line[data-state="paused"],
+.thinking-line[data-state="battery"] {
+  color: var(--mid);
+}
+.thinking-line[data-state="no_mind"] {
+  color: var(--bad);
+}
+.facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: 12px;
+}
+.facts .icon {
+  vertical-align: -1px;
+  margin-right: 3px;
+}
+@media (max-width: 380px) {
+  .pet-card {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Needs as V-pet meters (ten blocks), bond as hearts. */
+.meter {
+  display: grid;
+  grid-template-columns: 18px 88px 1fr;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 0;
+}
+#bond .meter {
+  grid-template-columns: 96px 1fr;
+}
+.blocks {
+  display: flex;
+  gap: 3px;
+}
+.blocks i {
+  flex: 1;
+  height: 12px;
+  max-width: 22px;
+  background: var(--panel-2);
+  box-shadow: 0 0 0 2px var(--line);
+}
+.blocks.high i.on {
+  background: var(--good);
+}
+.blocks.mid i.on {
+  background: var(--mid);
+}
+.blocks.low i.on {
+  background: var(--bad);
+}
+.hearts {
+  display: flex;
+  gap: 4px;
+  color: var(--bad);
+}
+.hearts .off {
+  color: var(--line);
+}
+
+/* Find a setting. */
+.search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 4px 10px;
+  padding: 4px 8px;
+  background: var(--panel);
+  box-shadow:
+    0 -3px 0 0 var(--ink),
+    0 3px 0 0 var(--ink),
+    -3px 0 0 0 var(--ink),
+    3px 0 0 0 var(--ink);
+}
+.search input {
+  flex: 1;
+  border: none;
+  box-shadow: none;
+  margin: 0;
+  padding: 2px 4px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-family: var(--body-font);
+  outline: none;
+}
+.no-match {
+  text-align: center;
+  margin: 20px;
+}
+
+/* A switch's explanation, tucked under its label. */
+.switch + .hint {
+  margin: 2px 0 0 52px;
+  font-size: 0.9em;
+}
+
+/* An update's release notes, kept as the plain text they arrived as. */
+.update-notes {
+  white-space: pre-wrap;
+  max-height: 16em;
+  overflow-y: auto;
+}

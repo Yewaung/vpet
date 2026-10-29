@@ -9,6 +9,11 @@ publish.workspace = true
 name = "vpet_app_lib"
 crate-type = ["rlib"]
 
+[features]
+# GPU acceleration (Vulkan) for the language model. Needs the Vulkan SDK to
+# build; the app falls back to the CPU if the GPU fails at runtime.
+gpu = ["vpet-llm/vulkan"]
+
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
@@ -22,14 +27,21 @@ serde_json.workspace = true
 # Network client: used ONLY by src/netgate.rs, behind the user's permission.
 ureq = "3"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
+# Update installers are only run if their signature verifies (updater.rs).
+minisign-verify = "0.2.5"
+# Checks downloaded language models against their published SHA-256 (brain.rs).
+sha2 = "0.10"
+base64 = "0.23.1"
 
 [target.'cfg(windows)'.dependencies]
-# Speakers' peak level (audio_win.rs) and offline text recognition of a
-# screen the user chose to share (ocr_win.rs).
+# Speakers' peak level (audio_win.rs), offline text recognition of a
+# screen the user chose to share (ocr_win.rs), and the graphics adapters
+# for hardware profiles (hardware.rs).
 windows = { version = "0.62", features = [
     "Foundation",
     "Globalization",
     "Graphics_Imaging",
+    "Win32_Graphics_Dxgi",
     "Media_Ocr",
     "Storage_Streams",
     "Win32_System_WinRT",
@@ -42,8 +54,11 @@ windows = { version = "0.62", features = [
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Power",
     "Win32_System_SystemInformation",
     "Win32_System_Threading",
     "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
     "Win32_UI_WindowsAndMessaging",
 ] }

@@ -348,13 +348,14 @@ Return to Idle
 
 Basic needs should be deterministic and NOT controlled by the LLM.
 
+Mood is not a need: how the pet feels is decided by its mind (§24), from these needs and everything else it knows.
+
 Track:
 
 ```text
 Hunger
 Energy
 Sleep
-Mood
 Health
 Fun
 Social Need
@@ -698,6 +699,8 @@ Example personality traits:
 
 Personality changes based on repeated experiences.
 
+The pet's mind (the LLM, §24) decides, as it feels about each moment, whether that moment changes a trait. The code caps each change to one small step.
+
 Examples:
 
 ```text
@@ -753,6 +756,8 @@ High Independence
 Low Trust
 → becomes cautious
 ```
+
+Trust, affection and familiarity change when the pet's mind feels something about a moment (§24), one capped step at a time. Time spent together still builds familiarity on its own.
 
 Do not make the relationship only a visible number.
 
@@ -858,6 +863,8 @@ The application should bundle its required AI runtime.
 
 The model should run locally.
 
+The model is required: it is the pet's mind. Without one the pet sleeps (and its egg waits) until it is installed. The installer downloads it; the light model (Qwen3 0.6B, Q8_0) is the minimum and the default.
+
 ---
 
 # 22. LLM Responsibilities
@@ -865,6 +872,8 @@ The model should run locally.
 The LLM should handle:
 
 ```text
+Feelings and Emotions
+Bond and Personality Changes (within caps)
 Conversation
 Natural Language Understanding
 Memory Summarization
@@ -908,6 +917,9 @@ Examples:
 User talks to pet
 → LLM
 
+Meaningful event (fed, petted, ignored, user returns, need low, game starts)
+→ LLM (how it feels; a burst of events is felt as one)
+
 Major event
 → LLM
 
@@ -945,9 +957,8 @@ Fast deterministic system.
 ```text
 Hunger
 Sleep
-Mood
 Movement
-Basic reactions
+Reflex reactions (a startle or flinch, shown while the mind thinks)
 Animation
 ```
 
@@ -964,11 +975,13 @@ Personality
 Evolution Pressure
 ```
 
-## Conversation Brain
+## Conversation Brain (its mind)
 
-Small local LLM.
+Small local LLM. Its mind grows up like a child's: it hatches knowing only its instincts (eat, sleep, play, stay warm, be wary of the sudden, wonder at the new) and learns everything else from its own life, writing down lessons backed by real moments. The model is told those instincts and lessons are all it knows. It matures from newborn to toddler, child, teen and wise, only as fast as both its age and its learning allow; a grown mind holds more of what it has learned in mind at once and thinks longer thoughts.
 
 ```text
+Feelings and emotions (its face, wants, words and voice follow them)
+Bond and personality changes, within caps
 Conversation
 Understanding
 Summaries

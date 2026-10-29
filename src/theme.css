@@ -307,6 +307,55 @@ input[type="range"] {
   border: 3px solid var(--panel-2);
 }
 
+/* In-window notices (ui.ts), instead of the browser's alert box. */
+.ui-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 14px;
+  z-index: 50;
+  max-width: min(92vw, 420px);
+  padding: 10px 14px;
+  font-family: var(--pixel);
+  font-size: 16px;
+  cursor: pointer;
+  opacity: 0;
+  pointer-events: none;
+  transform: translate(-50%, 16px);
+  transition: opacity 0.18s, transform 0.18s;
+}
+.ui-toast.show {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translate(-50%, 0);
+}
+.ui-toast[data-kind="error"] {
+  border-left: 8px solid var(--bad);
+}
+.ui-toast[data-kind="ok"] {
+  border-left: 8px solid var(--good);
+}
+
+/* An in-window yes/no question (ui.ts), instead of the browser's confirm box. */
+.ui-ask {
+  /* Centred over the window (.px-box's margin would pin it to a corner). */
+  margin: auto;
+  max-width: min(90vw, 380px);
+  padding: 16px 18px 10px;
+  border: none;
+  color: var(--text);
+}
+.ui-ask::backdrop {
+  background: var(--shade);
+}
+.ui-ask p {
+  margin: 0 0 12px;
+}
+.ui-ask-buttons {
+  display: flex;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
 @media (prefers-reduced-motion: reduce) {
   * {
     transition: none !important;

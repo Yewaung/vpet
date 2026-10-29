@@ -1,23 +1,52 @@
-// Status & settings window, in tabs: the pet itself, look & sound settings,
-// privacy controls (Delete All Pet Data), and developer tools (speed run).
+// Status & settings window, in tabs: the pet itself (a live card, its needs
+// as V-pet meters, its bond as hearts, then the details), settings in cards
+// you can search (its mind & battery first), privacy controls (Delete All
+// Pet Data), and developer tools (speed run).
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { fontMode, setFontMode, setTheme, theme, type FontMode, type Theme } from "./prefs";
 import { clickSounds, sfx } from "./sfx";
-import type { BrainStatus, InterestLevel, ModelSize, Personality, StatusView } from "./types";
+import { growthSection, paintPortraits, tipsSection } from "./status/growth";
+import { comfortShell, desktopShell, initPanels, performanceShell, setInternet, showQuiet, updatesShell } from "./status/panels";
+import { icon, type IconName } from "./icons";
+import { mountLivePet } from "./livepet";
+import { ask, failed, render } from "./ui";
+import type { BrainStatus, InterestLevel, ModelSize, Personality, StatusView, ThinkingView } from "./types";
 
 const app = document.getElementById("app")!;
 const REFRESH_MS = 2000;
 
-const NEED_LABELS: [keyof StatusView["needs"], string][] = [
-  ["satiety", "Fullness"],
-  ["energy", "Energy"],
-  ["fun", "Fun"],
-  ["social", "Company"],
-  ["stimulation", "Stimulation"],
-  ["health", "Health"],
+const NEED_LABELS: [keyof StatusView["needs"], string, IconName][] = [
+  ["satiety", "Fullness", "food"],
+  ["energy", "Energy", "zzz"],
+  ["fun", "Fun", "ball"],
+  ["social", "Company", "friends"],
+  ["stimulation", "Curiosity", "spark"],
+  ["health", "Health", "cross"],
 ];
+
+const BOND_LABELS: [keyof StatusView["relationship"], string][] = [
+  ["trust", "Trust"],
+  ["affection", "Affection"],
+  ["familiarity", "Knows you"],
+];
+
+/** What its mind is doing, in words. */
+function thinkingLine(t: ThinkingView): string {
+  switch (t.state) {
+    case "thinking":
+      return `Thinking: ${t.about ?? "about something"}…`;
+    case "paused":
+      return "Thinking paused while a fullscreen app runs. It will catch up after.";
+    case "battery":
+      return "On battery: it thinks less to keep your PC cool.";
+    case "no_mind":
+      return "Its mind isn't installed, so it sleeps. Get it in Settings > Its mind.";
+    default:
+      return "Its mind is awake.";
+  }
+}
 
 const TRAIT_WORDS: Record<keyof Personality, [string, string]> = {
   curiosity: ["curious", "incurious"],
@@ -58,9 +87,10 @@ const DELETED_ITEMS = [
   "Conversations",
   "Learned behavior",
   "Settings",
+  "Backups of all of the above",
 ];
 
-/** The creature fills about 40 of the sprite's 64 pixels. */
+/** The creature fills about 40 of the sprite's 64 display pixels. */
 const PET_PX = 40;
 
 function sizeName(scale: number): string {
@@ -79,23 +109,6 @@ const SPEEDS: [number, string][] = [
   [600, "1 minute = 10 hours. A day passes in about 2.5 minutes."],
 ];
 
-const GENE_WORDS: Record<string, string> = {
-  "features.horns": "horns",
-  "features.tail": "tail",
-  "features.wings": "wings",
-  "head.ear_length": "ears",
-  "limbs.claws": "claws",
-  "surface.armor": "armor",
-  "surface.markings": "markings",
-  "surface.pattern": "spots",
-  "color.glow": "glow",
-  "body.size": "size",
-  "energy.electric": "electric",
-  "energy.water": "water",
-  "energy.fire": "fire",
-  "energy.nature": "nature",
-};
-
 const NEED_WORDS: Record<string, string> = { satiety: "food", energy: "rest", fun: "fun" };
 
 function careSection(s: StatusView): string {
@@ -103,10 +116,10 @@ function careSection(s: StatusView): string {
   const calling = c.calling.length
     ? `<p class="calling pixel">! Calling for ${c.calling.map((n) => NEED_WORDS[n] ?? n).join(" and ")}. Help within 15 minutes, or it's a care mistake.</p>`
     : "";
-  return `<section class="px-box"><h2>Care</h2>${calling}
+  return `<section class="px-box"><h2>${icon("cross")} Care</h2>${calling}
     <p>Care mistakes this stage: <strong>${c.mistakes_stage}</strong> <span class="muted">(${c.mistakes_total} in its whole life)</span></p>
-    <p class="muted">Like on a V-pet, an unanswered call is a care mistake. Mistakes make it more independent and wary,
-      and push its next evolution towards a tougher, scruffier look. Good care keeps it bright.</p></section>`;
+    <p class="muted">Like on a V-pet, an unanswered call is a care mistake. Its mind feels each one (often losing a little trust),
+      and mistakes push its next evolution towards a tougher, scruffier look. Good care keeps it bright.</p></section>`;
 }
 
 function familySection(s: StatusView): string {
@@ -121,34 +134,12 @@ function familySection(s: StatusView): string {
        <p>Its child will inherit its egg kind, much of its colour and some of its parts, with small changes of its own.
          Starting the next generation retires this pet to the family tree. Your settings, and what it learned about your habits, stay.</p>
        <button id="next-gen">Hatch the next generation</button>`
-    : s.stage === "advanced"
+    : s.stage === "apex"
       ? `<p class="muted">Fully grown pets eventually lay an egg for the next generation.</p>`
       : "";
-  return `<section class="px-box"><h2>Family</h2>
+  return `<section class="px-box"><h2>${icon("egg")} Family</h2>
     <p>Generation <strong>${f.generation}</strong>${f.parent_name ? `, child of <strong>${esc(f.parent_name)}</strong>` : ""}.
       ${s.egg ? `<span class="muted">Hatched from a ${esc(s.egg)} egg.</span>` : ""}</p>${egg}${tree}</section>`;
-}
-
-function growthSection(s: StatusView): string {
-  const g = s.growth;
-  const next = g.next
-    ? `<p>Next stage: <strong>${g.next}</strong></p>${bar(g.readiness)}
-       <p class="muted">${Math.round(g.readiness * 100)}% ready (90% needed). Readiness grows with age, care, your bond,
-       a settled personality and goals it reaches. It must also spend ${Math.round(g.min_stage_hours)} h in each stage
-       (${Math.floor(g.stage_hours)} h so far).</p>`
-    : `<p class="muted">${s.stage === "advanced" ? "Fully grown." : "Keeps growing as it's cared for."}</p>`;
-  const history = g.history.length
-    ? `<ol class="history">${g.history
-        .map((h) => {
-          const visible = h.changes
-            .filter(([gene, d]) => GENE_WORDS[gene] && Math.abs(d) >= 0.02)
-            .map(([gene, d]) => `${GENE_WORDS[gene]} ${d > 0 ? "+" : "−"}`)
-            .join(", ");
-          return `<li><strong>${esc(h.from)} → ${esc(h.to)}</strong> <time>${new Date(h.at_ms).toLocaleString()}</time>${visible ? `<br><span class="muted">${esc(visible)}</span>` : ""}</li>`;
-        })
-        .join("")}</ol>`
-    : "";
-  return `<section class="px-box"><h2>Growing up</h2>${next}${history}</section>`;
 }
 
 const TABS = [
@@ -160,7 +151,19 @@ const TABS = [
 type Tab = (typeof TABS)[number][0];
 
 /** Old links (e.g. the first-hatch consent prompt) point at sections. */
-const SECTION_TAB: Record<string, Tab> = { consent: "privacy", internet: "privacy", appearance: "settings", sound: "settings", speedrun: "dev" };
+const SECTION_TAB: Record<string, Tab> = {
+  consent: "privacy",
+  internet: "privacy",
+  mind: "settings",
+  updates: "privacy",
+  appearance: "settings",
+  look: "settings",
+  sound: "settings",
+  performance: "settings",
+  comfort: "settings",
+  desktop: "settings",
+  speedrun: "dev",
+};
 
 function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
@@ -189,8 +192,10 @@ function stageLine(s: StatusView): string {
     const pct = Math.round(s.incubation * 100);
     return s.egg ? `A ${s.egg} egg. Something is stirring inside (${pct}% incubated).` : "A mystery egg. Choose which egg it is to start.";
   }
-  return `A ${s.stage} creature, ${duration(s.age_secs)} old.`;
+  return `Stage ${s.identity.stage_number} of 12: ${s.identity.stage_label}. ${duration(s.age_secs)} old.`;
 }
+
+const TEMPER_WORDS = { fierce: "Fierce", gentle: "Gentle", balanced: "Balanced" } as const;
 
 /** Only traits that have clearly moved away from neutral are described. */
 function emergingTraits(p: Personality): string {
@@ -212,26 +217,88 @@ function bar(value: number): string {
   return `<div class="bar" role="meter" aria-valuenow="${v}" aria-valuemin="0" aria-valuemax="100"><div class="fill ${level}" style="width:${v}%"></div></div>`;
 }
 
+/** A V-pet style meter: ten blocks, green to red as it empties. */
+function blocks(value: number, label: string): string {
+  const v = Math.round(value * 100);
+  const on = Math.round(value * 10);
+  const level = v < 25 ? "low" : v < 55 ? "mid" : "high";
+  const cells = Array.from({ length: 10 }, (_, i) => `<i class="${i < on ? "on" : ""}"></i>`).join("");
+  return `<span class="blocks ${level}" role="meter" aria-label="${label}" aria-valuenow="${v}" aria-valuemin="0" aria-valuemax="100" title="${label}: ${v}%">${cells}</span>`;
+}
+
+/** Five hearts, filled as far as the value goes. */
+function hearts(value: number, label: string): string {
+  const full = Math.round(value * 5);
+  const cells = Array.from({ length: 5 }, (_, i) => `<span class="${i < full ? "on" : "off"}">${icon("heart", 2)}</span>`).join("");
+  return `<span class="hearts" role="meter" aria-label="${label}" aria-valuenow="${Math.round(value * 100)}" aria-valuemin="0" aria-valuemax="100" title="${label}: ${Math.round(value * 100)}%">${cells}</span>`;
+}
+
 // ---------- Pet tab (live) ----------
 
 // Buttons inside the live-rendered Pet tab.
 document.addEventListener("click", async (e) => {
   if ((e.target as HTMLElement).id !== "next-gen") return;
-  if (!confirm("Start the next generation? This pet joins the family tree and its egg hatches into a new pet.")) return;
+  if (!(await ask("Start the next generation? This pet joins the family tree and its egg hatches into a new pet.", "Start", "Not yet"))) return;
   try {
     await invoke("next_generation");
     sfx.hatch();
     await refresh();
   } catch (err) {
-    alert(`Could not start the next generation: ${err}`);
+    failed("start the next generation", err);
   }
 });
 
 function renderPet(s: StatusView): void {
   const isEgg = s.stage === "egg";
-  const needs = isEgg
-    ? `<p class="muted">Needs begin after hatching.</p>`
-    : NEED_LABELS.map(([k, label]) => `<div class="need"><span class="pixel">${label}</span>${bar(s.needs[k])}</div>`).join("");
+  const feeling = s.feeling;
+  const feels = isEgg
+    ? ""
+    : feeling
+      ? `<p class="feeling-line">${icon("bubble")} Feels <strong>${esc([feeling.strength, feeling.emotion].filter(Boolean).join(" "))}</strong>
+          <span class="muted">because ${esc(feeling.cause.replace(/\.$/, "").toLowerCase())}</span></p>`
+      : `<p class="feeling-line">${icon("bubble")} <span class="muted">Calm right now.</span></p>`;
+  const id = s.identity;
+  const facts = isEgg
+    ? `<span>${icon("egg")} ${esc(stageLine(s))}</span>`
+    : [
+        `<span>${icon("clock")} ${duration(s.age_secs)} old</span>`,
+        id.gender ? `<span>${id.gender === "female" ? "♀ Female" : "♂ Male"}</span>` : "",
+        `<span>${TEMPER_WORDS[id.temperament]}</span>`,
+        `<span>${icon("book")} ${s.maturity.lessons} learned</span>`,
+        `<span>${icon("bubble")} ${s.known_words.length} words</span>`,
+        `<span title="Care mistakes this stage">${icon("cross")} ${s.care.mistakes_stage} mistakes</span>`,
+        s.generation > 1 ? `<span>${icon("egg")} Generation ${s.generation}</span>` : "",
+      ].join("");
+  render(
+    "pet-card",
+    `<h1>${s.name ? esc(s.name) : "Your pet"}</h1>
+    <div class="tags">
+      ${isEgg ? `<span class="tag">Egg</span>` : `<span class="tag">Stage ${id.stage_number}/12: ${esc(id.stage_label)}</span>`}
+      ${isEgg ? "" : `<span class="tag mind" title="${esc(s.maturity.how)}">${icon("brain")} ${esc(s.maturity.stage)} mind</span>`}
+      ${s.speed_run ? `<span class="tag hot">Speed run x${s.speed_run}</span>` : ""}
+    </div>
+    ${s.form ? `<p><strong>${esc(s.form.name)}</strong> <span class="muted">${esc(s.form.story)}</span></p>` : ""}
+    ${!isEgg && id.stage_number >= 4 ? `<p class="muted">Its form: ${esc(id.look)}${id.flies ? " · it can fly" : ""}.</p>` : ""}
+    ${feels}
+    <p class="muted thinking-line" data-state="${s.thinking.state}">${esc(thinkingLine(s.thinking))}</p>
+    <div class="facts">${facts}</div>`,
+  );
+  render("pet-notice", s.recovery ? `<section class="px-box notice" role="alert"><p>${esc(s.recovery)}</p></section>` : "");
+
+  render(
+    "needs",
+    isEgg
+      ? `<p class="muted">Needs begin after hatching.</p>`
+      : NEED_LABELS.map(([k, label, ic]) => `<div class="meter">${icon(ic)}<span class="pixel">${label}</span>${blocks(s.needs[k], label)}</div>`).join(""),
+  );
+  render(
+    "bond",
+    isEgg
+      ? `<p class="muted">It gets to know you once it hatches.</p>`
+      : `${BOND_LABELS.map(([k, label]) => `<div class="meter"><span class="pixel">${label}</span>${hearts(s.relationship[k], label)}</div>`).join("")}
+         <p><strong>${esc(s.bond)}.</strong> <span class="muted">${emergingTraits(s.personality)}</span></p>
+         ${s.user_name ? `<p class="muted">It knows your name: ${esc(s.user_name)}.</p>` : ""}`,
+  );
 
   const memories = s.memories.length
     ? s.memories
@@ -242,27 +309,17 @@ function renderPet(s: StatusView): void {
         )
         .join("")
     : `<li class="muted">No memories yet.</li>`;
-
-  $("pet-live").innerHTML = `
-    <section class="px-box hero">
-      <h1>${s.name ? esc(s.name) : "Your pet"}</h1>
-      ${s.form ? `<p><strong>${esc(s.form.name)}</strong>: <span class="muted">${esc(s.form.story)}</span></p>` : ""}
-      <p>${stageLine(s)}${s.speed_run ? ` <span class="badge pixel">SPEED RUN x${s.speed_run}</span>` : ""}</p>
-      ${isEgg ? "" : `<p><strong>${esc(s.bond)}.</strong> ${emergingTraits(s.personality)}</p>`}
-      ${s.user_name ? `<p class="muted">It knows your name: ${esc(s.user_name)}.</p>` : ""}
-    </section>
+  const changed = render(
+    "pet-more",
+    `${tipsSection(s)}
     ${isEgg ? "" : growthSection(s)}
     ${isEgg ? "" : careSection(s)}
     ${familySection(s)}
-    <section class="px-box">
-      <h2>Needs</h2>
-      ${needs}
-    </section>
     ${
       isEgg
         ? ""
         : `<section class="px-box">
-      <h2>Language</h2>
+      <h2>${icon("bubble")} Language</h2>
       <p>${LANGUAGE_STAGES[s.language_stage] ?? ""}</p>
       <p class="muted">${
         s.known_words.length
@@ -271,7 +328,7 @@ function renderPet(s: StatusView): void {
       }</p>
     </section>
     <section class="px-box">
-      <h2>Noticed about you</h2>
+      <h2>${icon("eye")} Noticed about you</h2>
       ${
         s.interests.length
           ? `<ul class="interests">${s.interests
@@ -287,9 +344,11 @@ function renderPet(s: StatusView): void {
     </section>`
     }
     <section class="px-box">
-      <h2>Memories</h2>
+      <h2>${icon("star")} Memories</h2>
       <ul class="memories">${memories}</ul>
-    </section>`;
+    </section>`,
+  );
+  if (changed) paintPortraits(s);
 
   const dev = (Object.entries(s.personality) as [string, number][])
     .map(([k, v]) => `<tr><td>${k}</td><td>${v.toFixed(3)}</td></tr>`)
@@ -317,8 +376,10 @@ function syncControls(s: StatusView): void {
   const vol = input("sfx-volume");
   if (document.activeElement !== vol) vol.value = String(Math.round(s.sound.volume * 100));
   $("data-path").textContent = s.data_path;
-  internetOn = s.internet_enabled;
+  $("mind-state").textContent = thinkingLine(s.thinking);
   updateDownloadButton();
+  setInternet(s.internet_enabled);
+  showQuiet(s.quiet);
 
   const size = input("size");
   const opacity = input("opacity");
@@ -348,7 +409,7 @@ async function saveAppearance(): Promise<void> {
   try {
     await invoke("set_appearance", { pixelScale: Number(input("size").value), opacity: Number(input("opacity").value) / 100 });
   } catch (e) {
-    alert(`Could not change the appearance: ${e}`);
+    failed("change the appearance", e);
   }
 }
 
@@ -357,7 +418,7 @@ async function saveSound(): Promise<void> {
   try {
     await invoke("set_sound_effects", { enabled: input("sfx-toggle").checked, volume: Number(input("sfx-volume").value) / 100 });
   } catch (e) {
-    alert(`Could not change sound effects: ${e}`);
+    failed("change sound effects", e);
   }
 }
 
@@ -376,20 +437,39 @@ function shell(): void {
     </nav>
 
     <div class="panel" id="panel-pet" role="tabpanel" aria-labelledby="tab-pet">
-      <div id="pet-live"></div>
+      <div id="pet-notice"></div>
+      <section class="px-box pet-card">
+        <canvas id="live-pet" class="live-pet" role="img" aria-label="Your pet right now"></canvas>
+        <div id="pet-card"></div>
+      </section>
+      <section class="px-box"><h2>${icon("food")} Needs</h2><div id="needs"></div></section>
+      <section class="px-box"><h2>${icon("heart")} Bond</h2><div id="bond"></div></section>
+      <div id="pet-more"></div>
     </div>
 
     <div class="panel" id="panel-settings" role="tabpanel" aria-labelledby="tab-settings" hidden>
+      ${searchBox("settings")}
+      <section class="px-box" id="mind">
+        <h2>${icon("brain")} Its mind &amp; battery</h2>
+        <p id="mind-state" class="pixel"></p>
+        <p id="mind-missing" class="calling pixel" hidden>Your pet's mind isn't installed yet. It sleeps until it has one.</p>
+        <p class="muted">Your pet feels, thinks and talks with a language model that runs <strong>on this computer</strong>.
+          It needs one to live. Getting it is a one-time download from Hugging Face; pressing Download is your
+          permission for that one file. Nothing about you or your pet is ever sent.</p>
+        <h3>Which mind</h3>
+        <div id="models" class="choices"></div>
+        <p id="model-status" class="muted"></p>
+        <span id="download-progress" class="muted"></span>
+        ${performanceShell()}
+        <p class="muted">Always: it thinks only with spare CPU, pauses while a fullscreen game or presentation runs, and thinks less on battery.</p>
+      </section>
       <section class="px-box" id="appearance">
-        <h2>Appearance</h2>
+        <h2>${icon("eye")} Size &amp; look</h2>
         <label class="slider" for="size">Size <span id="size-value" class="muted"></span></label>
         <input type="range" id="size" min="1" max="6" step="0.5" value="2.5" />
         <label class="slider" for="opacity">Opacity <span id="opacity-value" class="muted"></span></label>
         <input type="range" id="opacity" min="20" max="100" step="5" value="100" />
         <p class="muted">Lower opacity makes your pet see-through, so it stays out of the way of what's behind it.</p>
-      </section>
-      <section class="px-box" id="look">
-        <h2>Look</h2>
         <h3>Theme</h3>
         <div class="choices">${radios("theme", [["system", "Same as Windows"], ["light", "Light"], ["dark", "Dark terminal"]], theme())}</div>
         <h3>Text</h3>
@@ -398,7 +478,7 @@ function shell(): void {
           "Pixel everywhere" uses the pixel font for everything.</p>
       </section>
       <section class="px-box" id="sound">
-        <h2>Sound effects</h2>
+        <h2>${icon("note")} Sound effects</h2>
         <p>Retro beeps and chirps when you pet, feed and play, when it asks for something, when it talks,
           hatches or grows up. Its beeps start high and get lower as it grows.</p>
         <label class="switch"><input type="checkbox" id="sfx-toggle" /> Play sound effects</label>
@@ -406,11 +486,15 @@ function shell(): void {
         <input type="range" id="sfx-volume" min="0" max="100" step="5" value="60" />
         <button id="sfx-test" class="secondary">Test sound</button>
       </section>
+      ${desktopShell()}
+      ${comfortShell()}
+      <p class="no-match muted" hidden>No setting matches that.</p>
     </div>
 
     <div class="panel" id="panel-privacy" role="tabpanel" aria-labelledby="tab-privacy" hidden>
+      ${searchBox("privacy")}
       <section class="px-box" id="consent">
-        <h2>Activity observation</h2>
+        <h2>${icon("shield")} Activity observation</h2>
         <p>If you allow it, every few seconds VPet notes <strong>which app</strong> is in front
           (for example "VS Code") and whether you are active. It <strong>never</strong> reads window titles,
           screen contents, typing, files or browsing history. Unknown apps are recorded only as "other".
@@ -419,32 +503,28 @@ function shell(): void {
         <label class="switch"><input type="checkbox" id="activity-toggle" /> Allow activity observation</label>
       </section>
       <section class="px-box" id="internet">
-        <h2>Internet access</h2>
-        <p>Your pet is <strong>fully offline</strong> by default. It never needs the internet to live,
-          learn, remember or talk. Allow access only for a specific task, like downloading the
-          language model, and turn it off again afterwards.</p>
+        <h2>${icon("globe")} Internet access</h2>
+        <p>Your pet is <strong>fully offline</strong> by default: once its mind is installed it never needs
+          the internet to live, feel, learn, remember or talk. Allow access only for a specific task, like
+          checking for updates, and turn it off again afterwards.</p>
         <label class="switch"><input type="checkbox" id="internet-toggle" /> Allow internet access</label>
-        <h3>Language model</h3>
-        <p class="muted">The model helps your pet find words once it can talk. It runs on this computer.</p>
-        <div id="models" class="choices"></div>
-        <p id="model-status" class="muted"></p>
-        <span id="download-progress" class="muted"></span>
       </section>
+      ${updatesShell()}
       <section class="px-box">
-        <h2>Movie &amp; game reactions</h2>
+        <h2>${icon("speaker")} Movie &amp; game reactions</h2>
         <p>While activity observation sees you watching a video or playing a game, VPet can read
           <strong>only the speakers' volume level</strong> (one number, 10 times a second) to notice sudden
           loud moments like jump scares, and react. Audio is never recorded, and the microphone is never used.</p>
         <label class="switch"><input type="checkbox" id="sound-toggle" /> Allow sound reactions</label>
       </section>
       <section class="px-box">
-        <h2>Share a screen</h2>
+        <h2>${icon("screen")} Share a screen</h2>
         <p>Let your pet look at a screen, window or tab you pick, to learn words and notice what you're doing.
           Text is read on this computer, pictures are never saved, and only ordinary words are kept.</p>
         <button id="open-share" class="secondary">Share a screen…</button>
       </section>
       <section class="px-box">
-        <h2>Your data</h2>
+        <h2>${icon("box")} Your data</h2>
         <p>All pet data is stored only on this computer:</p>
         <code id="data-path"></code>
         <h3>Delete All Pet Data</h3>
@@ -458,11 +538,12 @@ function shell(): void {
         </div>
         <p id="delete-result" role="status"></p>
       </section>
+      <p class="no-match muted" hidden>No setting matches that.</p>
     </div>
 
     <div class="panel" id="panel-dev" role="tabpanel" aria-labelledby="tab-dev" hidden>
       <section class="px-box" id="speedrun">
-        <h2>Speed run (testing)</h2>
+        <h2>${icon("bolt")} Speed run (testing)</h2>
         <p id="speedrun-state"></p>
         <p>Starts over with a <strong>brand-new egg</strong> and runs its life faster, so you can watch it hatch,
           grow up and learn in minutes. <strong>Everything is deleted first</strong>: the current pet, its memories,
@@ -479,7 +560,7 @@ function shell(): void {
           about 8 real minutes), and a call for help always waits at least a real minute before it counts as a care mistake. It starts conversations at a normal pace, and learning your real app use can't be sped up.</p>
       </section>
       <section class="px-box" id="testing">
-        <h2>Test helpers</h2>
+        <h2>${icon("wrench")} Test helpers</h2>
         <h3>Pretend I'm watching</h3>
         <p class="muted">Watching together normally needs activity observation to see a real video or game. This pretends,
           until you turn it off or restart.</p>
@@ -490,13 +571,26 @@ function shell(): void {
         <button id="force-evolve" class="secondary">Evolve now</button>
       </section>
       <section class="px-box">
-        <h2>Developer details</h2>
+        <h2>${icon("book")} Developer details</h2>
         <table id="dev-table"></table>
       </section>
     </div>`;
 
-  // Tabs.
+  mountLivePet($("live-pet") as HTMLCanvasElement);
+  for (const panel of ["settings", "privacy"]) wireSearch(panel);
+
+  // Tabs: click, or arrow keys / Home / End between them (the ARIA tabs pattern).
   for (const [id] of TABS) $(`tab-${id}`).addEventListener("click", () => showTab(id));
+  document.querySelector(".tabs")!.addEventListener("keydown", (e) => {
+    const k = (e as KeyboardEvent).key;
+    const at = TABS.findIndex(([id]) => $(`tab-${id}`).getAttribute("aria-selected") === "true");
+    const to = k === "ArrowRight" ? at + 1 : k === "ArrowLeft" ? at - 1 : k === "Home" ? 0 : k === "End" ? TABS.length - 1 : null;
+    if (to === null) return;
+    e.preventDefault();
+    const [id] = TABS[(to + TABS.length) % TABS.length];
+    showTab(id);
+    $(`tab-${id}`).focus();
+  });
 
   // Appearance, look and sound.
   for (const id of ["size", "opacity"]) {
@@ -528,7 +622,7 @@ function shell(): void {
         await invoke(command, { enabled: box.checked });
       } catch (e) {
         box.checked = !box.checked;
-        alert(`Could not change the setting: ${e}`);
+        failed("change the setting", e);
       }
     });
   }
@@ -536,11 +630,9 @@ function shell(): void {
   net.addEventListener("change", async () => {
     try {
       await invoke("set_internet_access", { enabled: net.checked });
-      internetOn = net.checked;
-      updateDownloadButton();
     } catch (e) {
       net.checked = !net.checked;
-      alert(`Could not change the setting: ${e}`);
+      failed("change the setting", e);
     }
   });
 
@@ -559,7 +651,7 @@ function shell(): void {
     progress.textContent = "Starting…";
     try {
       await invoke("download_model", { size: button.dataset.size });
-      progress.textContent = "Done. Your pet can now find its words.";
+      progress.textContent = "Done. Your pet's mind is here: it wakes up.";
     } catch (err) {
       progress.textContent = String(err);
     }
@@ -590,7 +682,7 @@ function shell(): void {
       await invoke("force_evolve");
       await refresh();
     } catch (e) {
-      alert(`Could not evolve: ${e}`);
+      failed("evolve", e);
     }
   });
   $("speedrun-stop").addEventListener("click", async () => {
@@ -601,6 +693,25 @@ function shell(): void {
     } catch (e) {
       $("speedrun-result").textContent = String(e);
     }
+  });
+}
+
+function searchBox(panel: string): string {
+  return `<label class="search pixel">${icon("search")}<input type="search" id="search-${panel}" placeholder="Find a setting…" aria-label="Find a setting" /></label>`;
+}
+
+/** Hides the cards in a tab that don't mention what you typed. */
+function wireSearch(panel: string): void {
+  const box = input(`search-${panel}`);
+  box.addEventListener("input", () => {
+    const q = box.value.trim().toLowerCase();
+    let shown = 0;
+    for (const section of $(`panel-${panel}`).querySelectorAll<HTMLElement>(":scope > section")) {
+      const hit = !q || section.textContent!.toLowerCase().includes(q);
+      section.hidden = !hit;
+      if (hit) shown++;
+    }
+    ($(`panel-${panel}`).querySelector(".no-match") as HTMLElement).hidden = shown > 0;
   });
 }
 
@@ -627,6 +738,8 @@ function confirmed(inputId: string, buttonId: string, word: string, action: (val
 function showTab(tab: Tab): void {
   for (const [id] of TABS) {
     $(`tab-${id}`).setAttribute("aria-selected", String(id === tab));
+    // Only the open tab is in the Tab order; arrows move between tabs.
+    $(`tab-${id}`).tabIndex = id === tab ? 0 : -1;
     $(`panel-${id}`).hidden = id !== tab;
   }
 }
@@ -638,12 +751,17 @@ async function refresh(): Promise<void> {
     renderPet(s);
     syncControls(s);
   } catch (e) {
-    $("pet-live").innerHTML = `<p class="error">Could not load pet status: ${esc(String(e))}</p>`;
+    render("pet-card", `<p class="error">Could not load pet status: ${esc(String(e))}</p>`);
   }
 }
 
 function showSection(id: string): void {
   const tab = SECTION_TAB[id] ?? (TABS.some(([t]) => t === id) ? (id as Tab) : undefined);
+  // Coming from a link, every card should be there to find.
+  for (const panel of ["settings", "privacy"]) {
+    input(`search-${panel}`).value = "";
+    input(`search-${panel}`).dispatchEvent(new Event("input"));
+  }
   if (tab) showTab(tab);
   const el = document.getElementById(id);
   if (!el) return;
@@ -652,7 +770,6 @@ function showSection(id: string): void {
   setTimeout(() => el.classList.remove("highlight"), 2500);
 }
 
-let internetOn = false;
 let downloading = false;
 
 const MODEL_LABELS: Record<ModelSize, string> = {
@@ -660,11 +777,10 @@ const MODEL_LABELS: Record<ModelSize, string> = {
   full: "Full: best conversation, needs more memory",
 };
 
-/** Download buttons only work online, one download at a time. */
+/** One download at a time. */
 function updateDownloadButton(): void {
   for (const button of document.querySelectorAll<HTMLButtonElement>("#models button[data-size]")) {
-    button.disabled = downloading || !internetOn;
-    button.title = internetOn ? "" : "Allow internet access first";
+    button.disabled = downloading;
   }
 }
 
@@ -679,14 +795,18 @@ async function showModel(): Promise<void> {
     .join("");
   updateDownloadButton();
   $("model-status").textContent = b.available
-    ? `Talking with ${b.model_name}${b.loaded ? " (in memory now)" : " (loaded only while talking)"}.`
-    : "No language model installed. The pet still learns words and speaks simply.";
+    ? `Thinking with ${b.model_name}${b.loaded ? ` (in memory now, on the ${b.on_gpu ? "graphics card" : "CPU"})` : " (loaded only while it thinks)"}.`
+    : "No mind installed. The light one (0.6 GB) runs on almost any PC.";
+  $("mind-missing").hidden = b.available;
 }
 
 shell();
 showTab("pet");
+initPanels();
 clickSounds();
 void showModel();
+// A hardware profile also picks a model size.
+document.addEventListener("model-changed", () => void showModel());
 void refresh().then(() => {
   if (location.hash) showSection(location.hash.slice(1));
 });

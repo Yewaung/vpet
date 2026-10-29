@@ -7,14 +7,21 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "tauri": "tauri",
-    "test:core": "cargo test -p vpet-core -p vpet-storage"
+    "test:core": "cargo test -p vpet-core -p vpet-storage",
+    "docs:images": "rolldown scripts/docs-images.ts --platform node --format esm --file target/docs-images.mjs && node target/docs-images.mjs",
+    "docs": "node scripts/build-docs.mjs",
+    "art": "node scripts/art-pack.mjs",
+    "art:pxl": "node scripts/art-pxl.mjs && node scripts/art-pack.mjs",
+    "version:set": "node scripts/set-version.mjs"
   },
   "dependencies": {
-    "@tauri-apps/api": "^2.11.1"
+    "@tauri-apps/api": "^2.12.4"
   },
   "devDependencies": {
-    "@tauri-apps/cli": "^2.11.5",
+    "@tauri-apps/cli": "^2.12.4",
+    "marked": "^18.1.1",
+    "pxl-pixelart": "github:crsolver/claude-pxl#21fee41f7ecce00bc868d7567f24ffd0f3acc8fa",
     "typescript": "^5.9.0",
-    "vite": "^8.3.0"
+    "vite": "^8.3.5"
   }
 }

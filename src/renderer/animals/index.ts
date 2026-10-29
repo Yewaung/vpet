@@ -1,4 +1,5 @@
-// Every animal, by the egg it hatches from.
+// Every animal's grown templates, by the egg it hatches from: the heads of
+// the evolved bodies are cut from them (heads.ts).
 
 import type { EggKind } from "../../types";
 import type { Animal } from "../art";

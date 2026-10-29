@@ -25,7 +25,7 @@ export function fontMode(): FontMode {
   return read(FONT_KEY, ["readable", "pixel"] as const, "readable");
 }
 
-export function applyPrefs(): void {
+function applyPrefs(): void {
   const root = document.documentElement;
   const t = theme();
   if (t === "system") root.removeAttribute("data-theme");

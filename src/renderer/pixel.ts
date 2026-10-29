@@ -1,11 +1,19 @@
 // Tiny indexed-colour raster used by the sprite generator.
 
-export const SIZE = 64;
+/** The sprite canvas: the 48x48 art grid, each art pixel a 2x2 block. */
+export const SIZE = 96;
 
 export type RGBA = [number, number, number, number];
 
 export class Grid {
   readonly data: Uint8Array;
+  /**
+   * A full-colour layer (RGBA, size x size x 4) for painted sprites. It is
+   * drawn over the indexed pixels listed in `under` (a shadow, a glow) and
+   * under every other indexed pixel (effects, gear), which stay palette-driven.
+   */
+  rgba: Uint8ClampedArray | null = null;
+  under: number[] = [];
 
   constructor(readonly size = SIZE) {
     this.data = new Uint8Array(size * size);
@@ -128,6 +136,38 @@ export class Grid {
         if (c) this.set(x + dx, y + dy, c);
       }
     }
+    if (other.rgba) {
+      this.rgba ??= new Uint8ClampedArray(this.size * this.size * 4);
+      for (const u of other.under) if (!this.under.includes(u)) this.under.push(u);
+      for (let y = 0; y < n; y++) {
+        for (let x = 0; x < n; x++) {
+          const tx = x + dx;
+          const ty = y + dy;
+          if (other.rgba[(y * n + x) * 4 + 3] === 0 || tx < 0 || ty < 0 || tx >= this.size || ty >= this.size) continue;
+          this.rgba.set(other.rgba.subarray((y * n + x) * 4, (y * n + x) * 4 + 4), (ty * this.size + tx) * 4);
+        }
+      }
+    }
+  }
+
+  /** Whether pixel `i` (row-major) holds anything, in either layer. */
+  filled(i: number): boolean {
+    return this.data[i] !== 0 || (this.rgba != null && this.rgba[i * 4 + 3] !== 0);
+  }
+
+  /** A plain grid with `c` wherever this one holds anything, in either layer (for outlines and flashes). */
+  solid(c = 1): Grid {
+    const out = new Grid(this.size);
+    for (let i = 0; i < this.data.length; i++) if (this.filled(i)) out.data[i] = c;
+    return out;
+  }
+
+  /** The first row that holds anything (a pixel of either layer), or the size if the grid is empty. */
+  topRow(): number {
+    for (let i = 0; i < this.data.length; i++) {
+      if (this.data[i] || (this.rgba && this.rgba[i * 4 + 3])) return Math.floor(i / this.size);
+    }
+    return this.size;
   }
 
   flipX(): Grid {
@@ -135,6 +175,13 @@ export class Grid {
     const out = new Grid(n);
     for (let y = 0; y < n; y++) {
       for (let x = 0; x < n; x++) out.data[y * n + (n - 1 - x)] = this.data[y * n + x];
+    }
+    if (this.rgba) {
+      out.rgba = new Uint8ClampedArray(n * n * 4);
+      for (let y = 0; y < n; y++) {
+        for (let x = 0; x < n; x++) out.rgba.set(this.rgba.subarray((y * n + x) * 4, (y * n + x) * 4 + 4), (y * n + (n - 1 - x)) * 4);
+      }
+      out.under = [...this.under];
     }
     return out;
   }
@@ -180,15 +227,29 @@ export class Grid {
   }
 
   toImageData(palette: RGBA[]): ImageData {
-    const img = new ImageData(this.size, this.size);
+    return new ImageData(this.pixels(palette), this.size, this.size);
+  }
+
+  /** Every pixel as RGBA bytes: the indexed layer through `palette`, with the painted layer between. */
+  pixels(palette: RGBA[]): Uint8ClampedArray<ArrayBuffer> {
+    const img = { data: new Uint8ClampedArray(new ArrayBuffer(this.size * this.size * 4)) };
+    const layer = this.rgba;
     for (let i = 0; i < this.data.length; i++) {
-      const [r, g, b, a] = palette[this.data[i]] ?? [0, 0, 0, 0];
-      img.data[i * 4] = r;
-      img.data[i * 4 + 1] = g;
-      img.data[i * 4 + 2] = b;
-      img.data[i * 4 + 3] = a;
+      const idx = this.data[i];
+      let px: ArrayLike<number> = palette[idx] ?? [0, 0, 0, 0];
+      if (layer) {
+        // The under-layer indexed pixels, then the painted pixel, then the rest.
+        const below = idx !== 0 && this.under.includes(idx);
+        if (!below) px = [0, 0, 0, 0];
+        if (layer[i * 4 + 3]) px = layer.subarray(i * 4, i * 4 + 4);
+        if (idx !== 0 && !below) px = palette[idx] ?? px;
+      }
+      img.data[i * 4] = px[0];
+      img.data[i * 4 + 1] = px[1];
+      img.data[i * 4 + 2] = px[2];
+      img.data[i * 4 + 3] = px[3];
     }
-    return img;
+    return img.data;
   }
 }
 

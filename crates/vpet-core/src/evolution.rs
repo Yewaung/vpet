@@ -3,8 +3,10 @@
 //!
 //! Readiness = age + care + relationship + personality stability + goals
 //! reached. On evolving, "development pressure" from personality and
-//! interests becomes small genome changes. Changes are validated; identity
-//! (colours, face shape, visual DNA) never changes.
+//! interests becomes small genome changes, and from Rookie on the form gets
+//! its own style (`style.rs`). Changes are validated; identity (the face,
+//! ears and eye colour) never changes. Nine evolutions take a well-cared-for
+//! pet from Young to Apex in about eight weeks.
 
 use serde::{Deserialize, Serialize};
 
@@ -15,6 +17,7 @@ use crate::lifecycle::LifeStage;
 use crate::personality::{Personality, Trait};
 use crate::relationship::Relationship;
 use crate::rng::Rng;
+use crate::style::{Style, Temperament};
 
 /// Readiness needed to evolve.
 pub const EVOLUTION_READINESS: f64 = 0.9;
@@ -23,7 +26,7 @@ pub const MIN_STAGE_SECS: f64 = 24.0 * 3600.0;
 /// The largest change any one gene may make in one evolution (spec §32).
 pub const MAX_GENE_STEP: f64 = 0.15;
 
-/// Simulated time an advanced pet lives before it can lay an egg.
+/// Simulated time an Apex pet lives before it can lay an egg.
 pub const LAY_EGG_AFTER_SECS: f64 = 72.0 * 3600.0;
 
 /// The pet's family line (true, across-generation evolution).
@@ -50,23 +53,30 @@ pub struct GeneChange {
     pub delta: f64,
 }
 
-/// What the next stage asks of a pet: (simulated hours, care actions, goals reached).
+/// What the next stage asks of a pet: (simulated hours of age, care actions,
+/// goals reached). Early stages come every few days, later ones slower:
+/// about 56 days to Apex with good care.
 fn requirement(next: LifeStage) -> Option<(f64, f64, f64)> {
-    match next {
-        LifeStage::Young => Some((96.0, 120.0, 3.0)),
-        LifeStage::Mature => Some((240.0, 300.0, 10.0)),
-        LifeStage::Advanced => Some((480.0, 600.0, 25.0)),
-        _ => None,
-    }
+    Some(match next {
+        LifeStage::Rookie => (96.0, 100.0, 3.0),
+        LifeStage::Adept => (168.0, 160.0, 6.0),
+        LifeStage::Champion => (264.0, 230.0, 10.0),
+        LifeStage::Veteran => (384.0, 310.0, 14.0),
+        LifeStage::Ultimate => (528.0, 400.0, 19.0),
+        LifeStage::Mega => (696.0, 500.0, 25.0),
+        LifeStage::Legend => (888.0, 610.0, 31.0),
+        LifeStage::Mythic => (1104.0, 730.0, 38.0),
+        LifeStage::Apex => (1344.0, 860.0, 45.0),
+        _ => return None,
+    })
 }
 
+/// The stage an evolution leads to (Egg and Baby grow up by other rules).
 pub fn next_stage(stage: LifeStage) -> Option<LifeStage> {
-    match stage {
-        LifeStage::Developing => Some(LifeStage::Young),
-        LifeStage::Young => Some(LifeStage::Mature),
-        LifeStage::Mature => Some(LifeStage::Advanced),
-        _ => None,
+    if stage < LifeStage::Child || stage == LifeStage::Apex {
+        return None;
     }
+    LifeStage::ALL.get(stage as usize + 1).copied()
 }
 
 /// How settled the personality is: traits that have moved away from neutral.
@@ -129,7 +139,7 @@ fn pressure(to: LifeStage, p: &Personality, interests: &Interests) -> Vec<(&'sta
         ("color.glow", 0.3 * d(Trait::Creativity)),
     ]);
     // Wings only appear once the body can carry them.
-    if matches!(to, LifeStage::Mature | LifeStage::Advanced) {
+    if to >= LifeStage::Champion {
         out.push(("features.wings", 0.4 * d(Trait::Independence) + 0.2 * d(Trait::Curiosity)));
     }
     // What the pet sees you do leaves a trace, as elemental energy.
@@ -192,7 +202,9 @@ fn apply(parent: &Genome, deltas: &[(&'static str, f64)], scale: f64) -> (Genome
     }
     let mut changes = Vec::new();
     for (gene, d) in summed {
-        let Some(v) = gene_mut(&mut g, gene) else { continue };
+        let Some(v) = gene_mut(&mut g, gene) else {
+            continue;
+        };
         let before = *v;
         *v = (before + (d * scale).clamp(-MAX_GENE_STEP, MAX_GENE_STEP)).clamp(0.0, 1.0);
         let delta = *v - before;
@@ -232,7 +244,7 @@ fn mutate_parts(g: &mut Genome, to: LifeStage, p: &Personality, mistakes: u32, r
     } else if parts.horn == 0 && t(Trait::Curiosity) > 0.6 {
         set("horn", &mut parts.horn, 4, &mut changes);
     }
-    if parts.wings == 0 && matches!(to, LifeStage::Mature | LifeStage::Advanced) && t(Trait::Independence) > 0.56 {
+    if parts.wings == 0 && to >= LifeStage::Champion && t(Trait::Independence) > 0.56 {
         set("wings", &mut parts.wings, *rng.pick(&[1, 2, 3]), &mut changes);
     }
     if parts.back == 0 {
@@ -391,48 +403,295 @@ pub fn child_genome(parent: &Genome, child_seed: u64) -> Genome {
     g
 }
 
+/// How a visible gene change reads in words: (grew, shrank).
+fn phrase(c: &GeneChange) -> Option<(&'static str, &'static str)> {
+    Some(match c.gene.as_str() {
+        "part.horn" => ("a horn grew", "my horn changed"),
+        "part.wings" => ("I grew wings", "my wings changed"),
+        "part.back" => ("something grew on my back", "my back changed"),
+        "part.tail" => ("my tail changed shape", "my tail changed shape"),
+        "part.eyes" => ("my eyes changed", "my eyes changed"),
+        "part.mark" => ("new markings appeared", "my markings changed"),
+        "features.horns" => ("horns grew", "my horns got smaller"),
+        "features.tail" => ("my tail got longer", "my tail got shorter"),
+        "features.wings" => ("wings started to grow", "my wings got smaller"),
+        "head.ear_length" => ("my ears got bigger", "my ears got smaller"),
+        "limbs.claws" => ("claws came in", "my claws got softer"),
+        "surface.armor" => ("tough plates formed", "my plates softened"),
+        "surface.markings" => ("my markings got bolder", "my markings faded"),
+        "surface.pattern" => ("new spots appeared", "my spots faded"),
+        "color.glow" => ("I started to glow", "my glow dimmed"),
+        "body.size" => ("I got bigger", "I got smaller"),
+        "energy.electric" => ("I feel a little electric", "my spark faded"),
+        "energy.water" => ("I feel calm like water", "my calm faded"),
+        "energy.fire" => ("I feel warm like fire", "my warmth faded"),
+        "energy.nature" => ("I feel close to nature", "my green faded"),
+        // The form's style (`style.rs`): gains are +1.
+        "style.gear.headphones" => ("I got headphones", "my headphones are gone"),
+        "style.gear.goggles" => ("I got goggles", "my goggles are gone"),
+        "style.gear.glasses" => ("I got glasses", "my glasses are gone"),
+        "style.gear.cap" => ("I got a cap", "my cap is gone"),
+        "style.gear.beret" => ("I got a beret", "my beret is gone"),
+        "style.gear.bandana" => ("I got a bandana", "my bandana is gone"),
+        "style.gear.crown" => ("I got a crown", "my crown is gone"),
+        "style.gear.flower_crown" => ("I got a flower crown", "my flowers are gone"),
+        "style.gear.scarf" => ("I got a scarf", "my scarf is gone"),
+        "style.gear.bowtie" => ("I got a bow tie", "my bow tie is gone"),
+        "style.gear.tie" => ("I got a tie", "my tie is gone"),
+        "style.element.fire" => ("fire burns around me", "my fire went out"),
+        "style.element.water" => ("water flows around me", "my water dried up"),
+        "style.element.wind" => ("the wind swirls around me", "my wind calmed"),
+        "style.element.electric" => ("sparks crackle around me", "my sparks faded"),
+        "style.element.nature" => ("leaves grow around me", "my leaves fell"),
+        "style.wings" => ("I grew wings and can fly", "my wings are gone"),
+        "style.jets" => ("I got a jetpack and can fly", "my jetpack is gone"),
+        "style.cyborg.leg" => ("I built myself a robot leg", "my robot leg is gone"),
+        "style.cyborg.arm" => ("I built myself a robot arm", "my robot arm is gone"),
+        "style.cyborg.eye" => ("I got a robot eye that sees everything", "my robot eye is gone"),
+        "style.weapon.cannon" => ("an energy cannon grew on my arm", "my cannon is gone"),
+        "style.weapon.staff" => ("I got a magic staff and can cast spells", "my staff is gone"),
+        "style.orb" => ("my energy gathered into an orb", "my orb faded"),
+        "style.markings" => ("markings of my own appeared", "my markings faded"),
+        "style.armor.spiked" => ("I grew spiked armour", "my armour is gone"),
+        "style.armor.plated" => ("I grew plate armour", "my armour is gone"),
+        "style.armor.sash" => ("I earned a hero's sash", "my sash is gone"),
+        "style.form.titan" => ("I became a Titan: massive power, high defence", "I'm no longer a Titan"),
+        "style.form.celestial" => ("I became Celestial, full of holy light", "my light faded"),
+        "style.form.abyss" => ("I became an Abyss form, full of void power", "the void left me"),
+        "style.form.dragon" => ("I became a legendary Dragon", "I'm no longer a dragon"),
+        "style.form.mecha" => ("I became a Mecha, part machine", "my machine body is gone"),
+        "style.form.beast_king" => ("I became the Beast King", "I'm no longer the Beast King"),
+        "style.form.spirit" => ("I became a Spirit of pure energy", "my spirit form faded"),
+        "style.form.cosmic" => ("I became Cosmic: stars move through me", "the stars left me"),
+        "style.form.ancient" => ("I awoke an Ancient, primordial power", "my ancient power slept"),
+        "style.form.ascendant" => ("I Ascended beyond every limit", "I came back down"),
+        "style.form.human" => ("I took a Human form, a hero like you", "I'm no longer human-shaped"),
+        "style.form.angel" => ("I became an Angel", "my angel wings folded"),
+        "style.form.kaiju" => ("I became a towering Kaiju", "I shrank back"),
+        "style.form.plant" => ("I bloomed into a Plant form", "my flowers fell"),
+        "style.form.orb" => ("I became an Orb of light with moons around me", "my moons drifted away"),
+        "style.body.biped" => ("my whole body changed: I stand tall now", "I'm back on all fours"),
+        "style.body.mech" => ("my whole body became a robot", "my robot body is gone"),
+        "style.body.serpent" => ("my whole body became long like a dragon", "my dragon body is gone"),
+        "style.body.spirit" => ("my whole body became a floating spirit", "I'm solid again"),
+        "style.body.native" => ("I'm back in my own body", "I'm back in my own body"),
+        "color.hue_primary" => ("my colour changed", "my colour changed"),
+        _ => return None,
+    })
+}
+
+/// Gene-change entries for how the form's style changed, so they are
+/// described, explained and stored like any other change. A hue shift is
+/// listed when it is big enough to see.
+pub fn style_changes(old: &crate::style::Style, new: &crate::style::Style, hue_shift: f64) -> Vec<GeneChange> {
+    let mut out = Vec::new();
+    let mut push = |gene: String, gained: bool| out.push(GeneChange { gene, delta: if gained { 1.0 } else { -1.0 } });
+    for g in &new.gear {
+        if !old.gear.contains(g) {
+            push(format!("style.gear.{}", g.key().replace(' ', "_")), true);
+        }
+    }
+    if new.element != old.element {
+        if let Some(e) = new.element {
+            push(format!("style.element.{}", e.key()), true);
+        }
+    }
+    if new.wings.is_some() && old.wings.is_none() {
+        push("style.wings".into(), true);
+    }
+    if new.jets && !old.jets {
+        push("style.jets".into(), true);
+    }
+    for c in &new.cyborg {
+        if !old.cyborg.contains(c) {
+            push(format!("style.cyborg.{}", c.key()), true);
+        }
+    }
+    if let Some(w) = new.weapon.filter(|w| old.weapon != Some(*w)) {
+        push(format!("style.weapon.{}", w.key()), true);
+    }
+    if new.orb && !old.orb {
+        push("style.orb".into(), true);
+    }
+    if new.markings && !old.markings {
+        push("style.markings".into(), true);
+    }
+    if let Some(a) = new.armor.filter(|a| old.armor != Some(*a)) {
+        push(format!("style.armor.{}", a.key()), true);
+    }
+    if let Some(f) = new.form.filter(|f| old.form != Some(*f)) {
+        push(format!("style.form.{}", f.key()), true);
+    }
+    if new.body != old.body {
+        push(format!("style.body.{}", format!("{:?}", new.body).to_lowercase()), true);
+    }
+    let shift = hue_shift.abs().min(1.0 - hue_shift.abs());
+    if shift >= 0.03 {
+        out.push(GeneChange { gene: "color.hue_primary".into(), delta: shift });
+    }
+    out
+}
+
+/// The changes worth putting into words, the most visible first. Whole new
+/// parts matter more than a slightly longer tail.
+fn visible(changes: &[GeneChange]) -> Vec<&GeneChange> {
+    let mut v: Vec<&GeneChange> = changes.iter().filter(|c| phrase(c).is_some() && c.delta.abs() >= 0.02).collect();
+    // A new body, gear or element is the most visible of all.
+    let weight = |c: &GeneChange| match c.gene.as_str() {
+        g if g.starts_with("style.body") => 30.0,
+        g if g.starts_with("style.") => 20.0,
+        g if g.starts_with("part.") => 10.0,
+        _ => c.delta.abs(),
+    };
+    v.sort_by(|a, b| weight(b).total_cmp(&weight(a)));
+    v.truncate(3);
+    v
+}
+
+fn said(c: &GeneChange) -> &'static str {
+    phrase(c).map(|(up, down)| if c.delta > 0.0 { up } else { down }).unwrap_or("I changed")
+}
+
+fn sentence_case(s: &str) -> String {
+    let mut c = s.chars();
+    c.next().map(|f| f.to_uppercase().collect::<String>() + c.as_str()).unwrap_or_default()
+}
+
 /// "My tail got longer and small horns grew." Largest visible changes first.
 pub fn describe(changes: &[GeneChange]) -> String {
-    let phrase = |c: &GeneChange| -> Option<(&'static str, &'static str)> {
-        Some(match c.gene.as_str() {
-            "part.horn" => ("a horn grew", "my horn changed"),
-            "part.wings" => ("I grew wings", "my wings changed"),
-            "part.back" => ("something grew on my back", "my back changed"),
-            "part.tail" => ("my tail changed shape", "my tail changed shape"),
-            "part.eyes" => ("my eyes changed", "my eyes changed"),
-            "part.mark" => ("new markings appeared", "my markings changed"),
-            "features.horns" => ("horns grew", "my horns got smaller"),
-            "features.tail" => ("my tail got longer", "my tail got shorter"),
-            "features.wings" => ("wings started to grow", "my wings got smaller"),
-            "head.ear_length" => ("my ears got bigger", "my ears got smaller"),
-            "limbs.claws" => ("claws came in", "my claws got softer"),
-            "surface.armor" => ("tough plates formed", "my plates softened"),
-            "surface.markings" => ("my markings got bolder", "my markings faded"),
-            "surface.pattern" => ("new spots appeared", "my spots faded"),
-            "color.glow" => ("I started to glow", "my glow dimmed"),
-            "body.size" => ("I got bigger", "I got smaller"),
-            "energy.electric" => ("I feel a little electric", "my spark faded"),
-            "energy.water" => ("I feel calm like water", "my calm faded"),
-            "energy.fire" => ("I feel warm like fire", "my warmth faded"),
-            "energy.nature" => ("I feel close to nature", "my green faded"),
-            _ => return None,
-        })
-    };
-    let mut visible: Vec<&GeneChange> = changes.iter().filter(|c| phrase(c).is_some() && c.delta.abs() >= 0.02).collect();
-    // Whole new parts matter more than a slightly longer tail.
-    let weight = |c: &GeneChange| if c.gene.starts_with("part.") { 10.0 } else { c.delta.abs() };
-    visible.sort_by(|a, b| weight(b).total_cmp(&weight(a)));
-    let parts: Vec<&str> = visible
-        .iter()
-        .take(3)
-        .filter_map(|c| phrase(c).map(|(up, down)| if c.delta > 0.0 { up } else { down }))
-        .collect();
+    let parts: Vec<&str> = visible(changes).into_iter().map(said).collect();
     match parts.as_slice() {
         [] => "I grew up a little.".into(),
-        [a] => format!("{}{}.", a[..1].to_uppercase(), &a[1..]),
-        [a, b] => format!("{}{} and {b}.", a[..1].to_uppercase(), &a[1..]),
-        [a, b, c, ..] => format!("{}{}, {b} and {c}.", a[..1].to_uppercase(), &a[1..]),
+        [a] => format!("{}.", sentence_case(a)),
+        [a, b] => format!("{} and {b}.", sentence_case(a)),
+        [a, b, c, ..] => format!("{}, {b} and {c}.", sentence_case(a)),
     }
+}
+
+/// A trait counts as a cause once it has clearly moved away from neutral.
+const CAUSE_LEAN: f64 = 0.04;
+/// Care mistakes this stage that count as "nobody came".
+const NEGLECT_MISTAKES: u32 = 3;
+
+/// The strongest trait among `candidates` that really leans that way.
+fn trait_cause(p: &Personality, candidates: &[(Trait, &'static str)]) -> Option<String> {
+    candidates
+        .iter()
+        .map(|(t, why)| (p.get(*t) - 0.5, *why))
+        .filter(|(d, _)| *d >= CAUSE_LEAN)
+        .max_by(|a, b| a.0.total_cmp(&b.0))
+        .map(|(_, why)| why.to_string())
+}
+
+/// Something it has really seen the user do often, for elemental energy.
+fn interest_cause(interests: &Interests, cats: &[AppCategory]) -> Option<String> {
+    interests
+        .stats
+        .iter()
+        .filter(|(c, s)| cats.contains(c) && s.reported >= InterestLevel::Pattern)
+        .max_by_key(|(_, s)| s.reported)
+        .map(|(c, _)| format!("I watched you {} a lot", c.activity_phrase()))
+}
+
+/// Why its style changed: gear from what it saw you do (or who it is), an
+/// element and new body from its temperament and life.
+fn style_cause(gene: &str, p: &Personality, interests: &Interests, style: &Style) -> Option<String> {
+    use AppCategory as A;
+    use Trait::*;
+    let seen = |cats: &[A]| interest_cause(interests, cats);
+    let temper = match style.temperament {
+        Temperament::Fierce => Some("I've grown fierce".to_string()),
+        Temperament::Gentle => Some("I've grown gentle".to_string()),
+        Temperament::Balanced => None,
+    };
+    match gene.strip_prefix("style.")? {
+        "gear.headphones" => seen(&[A::Music]),
+        "gear.goggles" => seen(&[A::Programming]).or_else(|| trait_cause(p, &[(Curiosity, "I'm curious about everything")])),
+        "gear.cap" => seen(&[A::Gaming]).or_else(|| trait_cause(p, &[(Competitiveness, "I love to win")])),
+        "gear.scarf" => seen(&[A::Video]).or_else(|| trait_cause(p, &[(Sociality, "I like company")])),
+        "gear.glasses" => seen(&[A::Reading]).or_else(|| trait_cause(p, &[(Caution, "I've learned to be careful")])),
+        "gear.beret" | "gear.flower_crown" => seen(&[A::Design]).or_else(|| trait_cause(p, &[(Creativity, "I like trying new things")])),
+        "gear.bowtie" => seen(&[A::Chat]).or_else(|| trait_cause(p, &[(Affection, "I love being close to you")])),
+        "gear.tie" => seen(&[A::Office]),
+        "gear.bandana" => trait_cause(p, &[(Bravery, "I've grown brave")]),
+        "gear.crown" => Some("I reached the very top".into()),
+        "element.fire" => seen(&[A::Design, A::Video]).or_else(|| trait_cause(p, &[(Competitiveness, "I love to win")])).or(temper),
+        "element.water" => seen(&[A::Music]).or_else(|| trait_cause(p, &[(Caution, "I've learned to be careful")])),
+        "element.wind" => seen(&[A::Video]).or_else(|| trait_cause(p, &[(Independence, "I want to go my own way")])).or(temper),
+        "element.electric" => seen(&[A::Gaming, A::Programming]).or_else(|| trait_cause(p, &[(Curiosity, "I'm curious about everything")])),
+        "element.nature" => seen(&[A::Reading, A::Chat]).or_else(|| trait_cause(p, &[(Affection, "I love being close to you")])).or(temper),
+        "wings" => trait_cause(p, &[(Independence, "I want to go my own way"), (Curiosity, "I want to see everything")]),
+        "jets" => seen(&[A::Programming, A::Gaming]).or_else(|| trait_cause(p, &[(Curiosity, "I'm curious about everything")])),
+        "cyborg.leg" | "cyborg.arm" | "cyborg.eye" => seen(&[A::Programming, A::Gaming]).or(temper),
+        "weapon.cannon" => seen(&[A::Gaming]).or_else(|| trait_cause(p, &[(Competitiveness, "I love to win"), (Bravery, "I've grown brave")])).or(temper),
+        "weapon.staff" => seen(&[A::Reading, A::Design]).or_else(|| trait_cause(p, &[(Creativity, "I like trying new things")])).or(temper),
+        "orb" => style.element.map(|e| format!("my {} energy grew so strong", e.key())),
+        "markings" => Some("I'm becoming more and more myself".into()),
+        "armor.spiked" | "armor.plated" | "armor.sash" => temper.or_else(|| trait_cause(p, &[(Bravery, "I've grown brave"), (Caution, "I've learned to be careful")])),
+        "form.titan" => trait_cause(p, &[(Bravery, "I've grown brave"), (Caution, "I want to protect you")]),
+        "form.celestial" | "form.angel" => trait_cause(p, &[(Affection, "I love being close to you")]).or(temper),
+        "form.abyss" => temper.or_else(|| trait_cause(p, &[(Independence, "I want to go my own way")])),
+        "form.dragon" | "form.kaiju" | "form.beast_king" => {
+            seen(&[A::Gaming]).or_else(|| trait_cause(p, &[(Competitiveness, "I love to win"), (Bravery, "I've grown brave")])).or(temper)
+        }
+        "form.mecha" => seen(&[A::Programming, A::Gaming]),
+        "form.spirit" | "form.plant" => temper.or_else(|| trait_cause(p, &[(Curiosity, "I'm curious about everything")])),
+        "form.cosmic" | "form.orb" => seen(&[A::Reading, A::Video, A::Music]).or_else(|| trait_cause(p, &[(Curiosity, "I'm curious about everything"), (Creativity, "I like trying new things")])),
+        "form.ancient" => seen(&[A::Reading, A::Office]).or_else(|| trait_cause(p, &[(Caution, "I've learned to be careful")])),
+        "form.human" => seen(&[A::Chat, A::Office]).or_else(|| trait_cause(p, &[(Sociality, "I like company")])),
+        "form.ascendant" => Some("you raised me all the way to the top".into()),
+        "body.mech" => seen(&[A::Programming, A::Gaming]),
+        "body.serpent" | "body.spirit" => temper,
+        "body.biped" => trait_cause(p, &[(Bravery, "I've grown brave"), (Competitiveness, "I love to win")]),
+        _ => None,
+    }
+}
+
+/// Why one change happened, from the pet's actual life. `None` when nothing
+/// real explains it: the pet then says nothing rather than make a cause up.
+fn cause(c: &GeneChange, p: &Personality, interests: &Interests, mistakes: u32, style: &Style) -> Option<String> {
+    use Trait::*;
+    let neglect = mistakes >= NEGLECT_MISTAKES;
+    let part = c.delta as u8;
+    if c.gene.starts_with("style.") {
+        return style_cause(&c.gene, p, interests, style);
+    }
+    match c.gene.as_str() {
+        "color.hue_primary" => style.element.map(|e| format!("the {} in me changed my colour", e.key())),
+        "part.horn" if matches!(part, 4 | 5) => trait_cause(p, &[(Curiosity, "I'm curious about everything")]),
+        "part.horn" | "features.horns" => trait_cause(p, &[(Bravery, "I've grown brave"), (Competitiveness, "I love to win")]),
+        "limbs.claws" if neglect => Some("I had to look after myself when nobody came".into()),
+        "limbs.claws" => trait_cause(p, &[(Competitiveness, "I love to win"), (Bravery, "I've grown brave")]),
+        "features.tail" | "part.tail" | "movement.bounce" => trait_cause(p, &[(Playfulness, "we played so much"), (Creativity, "I like trying new things")]),
+        "head.ear_length" => trait_cause(p, &[(Curiosity, "I'm always listening and curious")]),
+        "features.wings" | "part.wings" => trait_cause(p, &[(Independence, "I want to go my own way"), (Curiosity, "I want to see everything")]),
+        "surface.armor" | "surface.scales" if neglect => Some("nobody came when I called, so I got tougher".into()),
+        "surface.armor" | "surface.scales" => trait_cause(p, &[(Caution, "I've learned to be careful")]),
+        "part.back" if part == 1 && neglect => Some("nobody came when I called, so I got tougher".into()),
+        "part.back" if part == 3 => trait_cause(p, &[(Affection, "I love being close to you"), (Sociality, "I like company")]),
+        "part.back" => trait_cause(p, &[(Caution, "I've learned to be careful")]),
+        "part.eyes" if part == 2 && neglect => Some("I've had to stay on guard".into()),
+        "part.eyes" if part == 1 => trait_cause(p, &[(Affection, "I love being close to you")]),
+        "surface.markings" | "part.mark" => {
+            trait_cause(p, &[(Affection, "I love being close to you"), (Sociality, "I like company"), (Creativity, "I like trying new things")])
+        }
+        "surface.pattern" | "color.glow" | "part.eyes" => trait_cause(p, &[(Creativity, "I like trying new things")]),
+        "energy.electric" => interest_cause(interests, &[AppCategory::Gaming, AppCategory::Programming]),
+        "energy.water" => interest_cause(interests, &[AppCategory::Music, AppCategory::Video]),
+        "energy.fire" => interest_cause(interests, &[AppCategory::Design]),
+        "energy.nature" => interest_cause(interests, &[AppCategory::Reading, AppCategory::Chat]),
+        "body.size" if c.delta > 0.0 => Some("I'm growing up".into()),
+        _ => None,
+    }
+}
+
+/// "My horns grew because I've grown brave." One line per visible change
+/// that its real personality, care or your habits explain (spec §44).
+pub fn reasons(changes: &[GeneChange], p: &Personality, interests: &Interests, mistakes: u32, style: &Style) -> Vec<String> {
+    visible(changes)
+        .into_iter()
+        .filter_map(|c| cause(c, p, interests, mistakes, style).map(|why| format!("{} because {why}.", sentence_case(said(c)))))
+        .collect()
 }
 
 #[cfg(test)]
@@ -447,7 +706,7 @@ mod tests {
     fn age_alone_is_never_enough() {
         let r = Relationship::default();
         let p = Personality::neutral();
-        assert!(readiness(&dev(LifeStage::Developing, 10_000.0, 0, 0, &r, &p)) < EVOLUTION_READINESS);
+        assert!(readiness(&dev(LifeStage::Child, 10_000.0, 0, 0, &r, &p)) < EVOLUTION_READINESS);
     }
 
     #[test]
@@ -457,9 +716,9 @@ mod tests {
         p.set(Trait::Curiosity, 0.9);
         p.set(Trait::Playfulness, 0.8);
         p.set(Trait::Bravery, 0.8);
-        assert!(readiness(&dev(LifeStage::Developing, 100.0, 130, 3, &r, &p)) >= EVOLUTION_READINESS);
-        assert!(readiness(&dev(LifeStage::Developing, 30.0, 130, 3, &r, &p)) < EVOLUTION_READINESS, "too young");
-        assert_eq!(readiness(&dev(LifeStage::Advanced, 9e9, 9999, 999, &r, &p)), 0.0, "nothing after advanced");
+        assert!(readiness(&dev(LifeStage::Child, 100.0, 130, 3, &r, &p)) >= EVOLUTION_READINESS);
+        assert!(readiness(&dev(LifeStage::Child, 30.0, 130, 3, &r, &p)) < EVOLUTION_READINESS, "too young");
+        assert_eq!(readiness(&dev(LifeStage::Apex, 9e9, 9999, 999, &r, &p)), 0.0, "nothing after advanced");
     }
 
     #[test]
@@ -470,8 +729,8 @@ mod tests {
         let mut playful = Personality::neutral();
         playful.set(Trait::Playfulness, 1.0);
         let base = Genome::base();
-        let (a, changes) = evolve_genome(&base, LifeStage::Young, &brave, &Interests::default(), 0, &mut Rng::new(1));
-        let (b, _) = evolve_genome(&base, LifeStage::Young, &playful, &Interests::default(), 0, &mut Rng::new(1));
+        let (a, changes) = evolve_genome(&base, LifeStage::Rookie, &brave, &Interests::default(), 0, &mut Rng::new(1));
+        let (b, _) = evolve_genome(&base, LifeStage::Rookie, &playful, &Interests::default(), 0, &mut Rng::new(1));
         assert!(a.parts.horn > 0, "brave pets grow a horn");
         assert_eq!(b.parts.tail, 2, "playful pets grow a fluffy tail");
         assert!(a.features.horns > b.features.horns);
@@ -492,7 +751,7 @@ mod tests {
         parent.features.wings = 0.25;
         parent.body.mass = 0.2;
         parent.limbs.arm_length = 0.1;
-        let (g, _) = evolve_genome(&parent, LifeStage::Mature, &free, &Interests::default(), 0, &mut Rng::new(2));
+        let (g, _) = evolve_genome(&parent, LifeStage::Champion, &free, &Interests::default(), 0, &mut Rng::new(2));
         assert_eq!(g.validate(), Ok(()));
     }
 
@@ -500,8 +759,8 @@ mod tests {
     fn neglect_shapes_a_tougher_form() {
         let p = Personality::neutral();
         let base = Genome::for_egg(crate::genome::EggKind::Earth, 4);
-        let (cared, _) = evolve_genome(&base, LifeStage::Young, &p, &Interests::default(), 0, &mut Rng::new(3));
-        let (neglected, _) = evolve_genome(&base, LifeStage::Young, &p, &Interests::default(), 8, &mut Rng::new(3));
+        let (cared, _) = evolve_genome(&base, LifeStage::Rookie, &p, &Interests::default(), 0, &mut Rng::new(3));
+        let (neglected, _) = evolve_genome(&base, LifeStage::Rookie, &p, &Interests::default(), 8, &mut Rng::new(3));
         assert_eq!(neglected.parts.eyes, 2, "sharp eyes");
         assert_eq!(neglected.parts.back, 1, "spikes");
         assert!(neglected.color.saturation < cared.color.saturation);
@@ -513,9 +772,8 @@ mod tests {
         p.set(Trait::Bravery, 0.9);
         p.set(Trait::Competitiveness, 0.9);
         let base = Genome::for_egg(crate::genome::EggKind::Earth, 4);
-        let horns: std::collections::BTreeSet<u8> = (0..20)
-            .map(|s| evolve_genome(&base, LifeStage::Young, &p, &Interests::default(), 0, &mut Rng::new(s)).0.parts.horn)
-            .collect();
+        let horns: std::collections::BTreeSet<u8> =
+            (0..20).map(|s| evolve_genome(&base, LifeStage::Rookie, &p, &Interests::default(), 0, &mut Rng::new(s)).0.parts.horn).collect();
         assert!(horns.len() > 1, "different kinds of horn: {horns:?}");
     }
 
@@ -531,6 +789,38 @@ mod tests {
             assert_eq!(k.validate(), Ok(()));
         }
         assert!(kids.windows(2).any(|w| w[0] != w[1]), "siblings differ");
+    }
+
+    #[test]
+    fn reasons_come_only_from_its_real_life() {
+        let changes = vec![
+            GeneChange { gene: "features.horns".into(), delta: 0.12 },
+            GeneChange { gene: "features.tail".into(), delta: 0.1 },
+            GeneChange { gene: "energy.electric".into(), delta: 0.08 },
+        ];
+        let mut brave = Personality::neutral();
+        brave.set(Trait::Bravery, 0.7);
+        let why = reasons(&changes, &brave, &Interests::default(), 0, &Style::default());
+        assert_eq!(why, vec!["Horns grew because I've grown brave.".to_string()], "no playfulness or habit to explain the rest");
+
+        brave.set(Trait::Playfulness, 0.62);
+        let mut seen = Interests::default();
+        let stat = stat_at(InterestLevel::Habit);
+        seen.stats.insert(AppCategory::Gaming, stat);
+        let why = reasons(&changes, &brave, &seen, 0, &Style::default());
+        assert!(why.contains(&"My tail got longer because we played so much.".to_string()));
+        assert!(why.contains(&"I feel a little electric because I watched you playing games a lot.".to_string()), "{why:?}");
+    }
+
+    #[test]
+    fn neglect_is_named_as_the_reason_for_a_tougher_body() {
+        let changes = vec![GeneChange { gene: "limbs.claws".into(), delta: 0.1 }];
+        let why = reasons(&changes, &Personality::neutral(), &Interests::default(), 5, &Style::default());
+        assert_eq!(why, vec!["Claws came in because I had to look after myself when nobody came.".to_string()]);
+    }
+
+    fn stat_at(level: InterestLevel) -> crate::learning::InterestStat {
+        crate::learning::InterestStat { reported: level, ..Default::default() }
     }
 
     #[test]

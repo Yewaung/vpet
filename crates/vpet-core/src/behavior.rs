@@ -45,7 +45,13 @@ pub enum Reaction {
     Brave,
     Curious,
     Cheer,
+    /// The transformation into a new form, then its signature move.
+    Evolve,
 }
+
+/// Seconds the evolution animation runs: the flashing change from the old
+/// body to the new one, a burst of light, then the new form's own move.
+pub const EVOLVE_SECS: f64 = 9.0;
 
 /// How the desktop layer should move the window.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -80,6 +86,10 @@ pub enum Anim {
     Hide,
     Proud,
     Cheer,
+    /// Getting ready to evolve: glowing and gathering light.
+    Charge,
+    /// Transforming into the new form.
+    Evolve,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -108,6 +118,8 @@ pub enum BubbleIcon {
     Question,
     Anger,
     Music,
+    /// A reminder to rest your eyes and take a break.
+    Rest,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -128,6 +140,8 @@ pub struct Directive {
     pub walk_speed: f64,
     pub growth: f64,
     pub incubation: f64,
+    /// The evolution animation in progress: the old body to morph from.
+    pub transition: Option<crate::mind::Transition>,
 }
 
 pub struct Context<'a> {
@@ -141,6 +155,11 @@ pub struct Context<'a> {
     pub goal: Option<GoalKind>,
     /// Today's mood from its plan (thought by its mind), if any.
     pub mood: Option<crate::mind::Mood>,
+    /// An evolution is being prepared: too excited to sleep.
+    pub evolving: bool,
+    /// What its current feeling makes it want to do, and how hard it pulls
+    /// (thought by its mind, see `emotion`).
+    pub want: Option<(Intention, f64)>,
 }
 
 impl Intention {
@@ -235,6 +254,7 @@ impl Reaction {
             Reaction::Brave => 2.0,
             Reaction::Curious => 2.0,
             Reaction::Cheer => 2.5,
+            Reaction::Evolve => EVOLVE_SECS,
         }
     }
 
@@ -254,6 +274,7 @@ impl Reaction {
             Reaction::Brave => Anim::Proud,
             Reaction::Curious => Anim::Startled,
             Reaction::Cheer => Anim::Cheer,
+            Reaction::Evolve => Anim::Evolve,
         }
     }
 }
@@ -301,7 +322,7 @@ pub fn score(i: Intention, c: &Context) -> f64 {
         0.0
     };
     let base = match i {
-        Intention::Sleep if n.energy > 0.6 => 0.0,
+        Intention::Sleep if n.energy > 0.6 || c.evolving => 0.0,
         Intention::Sleep => (1.0 - n.energy).powi(2) * 1.6 + night,
         Intention::AskForFood if n.satiety > 0.5 => 0.0,
         Intention::AskForFood => (1.0 - n.satiety).powi(2) * 1.8,
@@ -330,7 +351,15 @@ pub fn score(i: Intention, c: &Context) -> f64 {
         Some((f, by)) if f == i && (base > 0.0 || i == Intention::Idle) => by,
         _ => 0.0,
     };
-    base + goal_boost + mood_boost
+    // What it feels pulls harder. It can want company, play or a walk any
+    // time, but it can't ask for food it doesn't need, sleep when it isn't
+    // tired, or watch with nothing on screen: those stay the body's call.
+    let free = matches!(i, Intention::Idle | Intention::Sit | Intention::Wander | Intention::Explore | Intention::SeekUser | Intention::AskForPlay);
+    let feel_boost = match c.want {
+        Some((w, pull)) if w == i && (base > 0.0 || free) => pull,
+        _ => 0.0,
+    };
+    base + goal_boost + mood_boost + feel_boost
 }
 
 /// What pushes the pet toward `i` right now, as (factor, strength 0..1).
@@ -369,6 +398,9 @@ pub fn drivers(i: Intention, c: &Context) -> Vec<(&'static str, f64)> {
     if c.mood.map(|m| m.leans().0) == Some(i) {
         d.push(("mood", 1.0));
     }
+    if let Some((_, pull)) = c.want.filter(|(w, _)| *w == i) {
+        d.push(("feeling", pull * 2.0));
+    }
     d.retain(|(_, v)| v.abs() > 0.01);
     d
 }
@@ -392,6 +424,10 @@ pub struct BehaviorState {
     /// Set when a bubble was just shown, so the pet can voice it in words.
     #[serde(default)]
     pub bubble_new: bool,
+    /// The intention the bubble speaks for (`Zzz` for sleep, `Mmh!` for food),
+    /// so it goes away the moment the pet moves on to something else.
+    #[serde(default)]
+    pub bubble_for: Option<Intention>,
 }
 
 impl Default for BehaviorState {
@@ -405,6 +441,7 @@ impl Default for BehaviorState {
             bubble_left: 0.0,
             bubble_cooldown: 0.0,
             bubble_new: false,
+            bubble_for: None,
         }
     }
 }
@@ -428,6 +465,14 @@ impl BehaviorState {
     }
 
     pub fn set_intention(&mut self, i: Intention, rng: &mut Rng) {
+        // A bubble about what it was doing no longer fits: hide it, and let
+        // the new intention speak up if it has something to say.
+        if self.bubble_for.is_some_and(|b| b != i) {
+            self.bubble = None;
+            self.bubble_left = 0.0;
+            self.bubble_for = None;
+            self.bubble_cooldown = 0.0;
+        }
         let (lo, hi) = i.duration_range();
         self.intention = i;
         self.intention_left = rng.range(lo, hi);
@@ -470,6 +515,7 @@ impl BehaviorState {
         if sound && self.bubble_cooldown <= 0.0 {
             if let Some(b) = baby_sound(rng, Some(self.intention), None) {
                 self.show_bubble(b);
+                self.bubble_for = Some(self.intention);
             }
             self.bubble_cooldown = match self.intention {
                 Intention::AskForFood | Intention::AskForPlay | Intention::Sleep => ASK_REPEAT_SECS,
@@ -484,6 +530,7 @@ impl BehaviorState {
         self.bubble_left -= dt;
         if self.bubble_left <= 0.0 {
             self.bubble = None;
+            self.bubble_for = None;
         }
         if self.reaction.is_some() {
             self.reaction_left -= dt;
@@ -512,6 +559,7 @@ impl BehaviorState {
         self.bubble = Some(b);
         self.bubble_left = BUBBLE_SECS;
         self.bubble_new = true;
+        self.bubble_for = None;
     }
 
     /// Returns true once after a new bubble appeared.
@@ -528,10 +576,16 @@ impl BehaviorState {
 
     /// Shows something the pet says in conversation; longer lines stay longer.
     pub fn say(&mut self, text: String) {
+        self.say_with(text, None);
+    }
+
+    /// Says something with an icon beside it.
+    pub fn say_with(&mut self, text: String, icon: Option<BubbleIcon>) {
         let secs = (2.5 + text.split_whitespace().count() as f64 * 0.45).min(12.0);
-        self.bubble = Some(Bubble { text, icon: None });
+        self.bubble = Some(Bubble { text, icon });
         self.bubble_left = secs;
         self.bubble_new = false;
+        self.bubble_for = None;
     }
 
     pub fn anim(&self, stage: LifeStage) -> Anim {
@@ -556,7 +610,9 @@ impl BehaviorState {
         }
     }
 
-    pub fn expression(&self, needs: &Needs, relationship: &Relationship) -> Expression {
+    /// The face: a quick reflex while it reacts, closed eyes asleep,
+    /// otherwise whatever its mind feels (`emotion`), calm with no feeling.
+    pub fn expression(&self, feeling: Option<&crate::emotion::Feeling>, relationship: &Relationship) -> Expression {
         if let Some(r) = self.reaction {
             return match r {
                 Reaction::Eat | Reaction::Happy => Expression::Happy,
@@ -568,23 +624,13 @@ impl BehaviorState {
                 Reaction::Scared => Expression::Scared,
                 Reaction::Brave => Expression::Happy,
                 Reaction::Curious => Expression::Surprised,
-                Reaction::Cheer => Expression::Excited,
+                Reaction::Cheer | Reaction::Evolve => Expression::Excited,
             };
         }
         if self.asleep() {
             Expression::Asleep
-        } else if needs.satiety < 0.25 {
-            Expression::Hungry
-        } else if needs.energy < 0.25 {
-            Expression::Sleepy
-        } else if needs.social < 0.25 || needs.fun < 0.2 || needs.health < 0.4 {
-            Expression::Sad
-        } else if matches!(self.intention, Intention::Explore | Intention::Watch) {
-            Expression::Curious
-        } else if needs.wellbeing() > 0.7 {
-            Expression::Happy
         } else {
-            Expression::Neutral
+            feeling.map_or(Expression::Neutral, |f| f.emotion.expression())
         }
     }
 }
@@ -602,6 +648,8 @@ mod tests {
             watching: None,
             goal: None,
             mood: None,
+            evolving: false,
+            want: None,
         }
     }
 
@@ -610,8 +658,7 @@ mod tests {
         let mut n = Needs::newborn();
         n.energy = 0.05;
         let (p, r) = (Personality::neutral(), Relationship::default());
-        let mut b = BehaviorState::default();
-        b.intention_left = 0.0;
+        let mut b = BehaviorState { intention_left: 0.0, ..BehaviorState::default() };
         b.update(&ctx(&n, &p, &r), &mut Rng::new(1), 1.0, false);
         assert_eq!(b.intention, Intention::Sleep);
     }

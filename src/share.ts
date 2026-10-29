@@ -7,8 +7,11 @@ import "./prefs";
 import { clickSounds, sfx } from "./sfx";
 
 const INTERVAL_SECS = 15;
-/** Enough detail for text, small enough to stay quick. */
-const MAX_SIDE = 2000;
+/**
+ * Enough detail for ordinary text, small enough to stay light: a frame is
+ * about 3.5 MB at most, so sending one never stalls the app.
+ */
+const MAX_SIDE = 1280;
 
 interface ScreenLook {
   words: number;

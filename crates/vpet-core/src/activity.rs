@@ -248,7 +248,7 @@ impl ActivityTracker {
 
         let finished = self.open.take().and_then(|o| {
             let duration_secs = (o.last_ms - o.started_ms) as f64 / 1000.0;
-            (duration_secs >= MIN_SESSION_SECS).then(|| ActivitySession {
+            (duration_secs >= MIN_SESSION_SECS).then_some(ActivitySession {
                 app: o.app,
                 category: o.class.category,
                 confidence: o.class.confidence,

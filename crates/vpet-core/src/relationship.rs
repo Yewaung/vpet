@@ -1,7 +1,9 @@
 use serde::{Deserialize, Serialize};
 
 /// The pet's bond with its user. Shown through behaviour first; the UI only
-/// ever describes it in words.
+/// ever describes it in words. Its mind changes trust, affection and
+/// familiarity as it feels about what happens (see `emotion`); only time
+/// spent together adds familiarity on its own.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Relationship {
     pub trust: f64,
@@ -20,25 +22,9 @@ impl Default for Relationship {
 }
 
 impl Relationship {
-    /// One act of care (petting, feeding, playing). Diminishing returns.
-    pub fn on_care(&mut self, weight: f64) {
-        self.affection += 0.02 * weight * (1.0 - self.affection);
-        self.trust += 0.01 * weight * (1.0 - self.trust);
-        self.familiarity += 0.005 * weight * (1.0 - self.familiarity);
-        self.clamp();
-    }
-
     /// Time spent with the user nearby.
     pub fn on_time_together(&mut self, hours: f64) {
         self.familiarity += 0.02 * hours * (1.0 - self.familiarity);
-        self.clamp();
-    }
-
-    /// Long absence: trust and affection fade a little, familiarity does not.
-    pub fn on_absence(&mut self, days: f64) {
-        let f = (0.02 * days).min(0.2);
-        self.trust -= f * self.trust;
-        self.affection -= f * 0.5 * self.affection;
         self.clamp();
     }
 
@@ -65,28 +51,17 @@ mod tests {
     use super::*;
 
     #[test]
-    fn care_grows_bond_with_diminishing_returns() {
+    fn time_together_builds_familiarity_with_diminishing_returns() {
         let mut r = Relationship::default();
-        r.on_care(1.0);
-        let first = r.affection;
+        r.on_time_together(1.0);
+        let first = r.familiarity;
         for _ in 0..500 {
-            r.on_care(1.0);
+            r.on_time_together(1.0);
         }
-        let before = r.affection;
-        r.on_care(1.0);
-        assert!(r.affection - before < first);
-        assert!(r.affection <= 1.0);
-    }
-
-    #[test]
-    fn absence_reduces_trust_but_not_familiarity() {
-        let mut r = Relationship {
-            trust: 0.8,
-            affection: 0.8,
-            familiarity: 0.8,
-        };
-        r.on_absence(5.0);
-        assert!(r.trust < 0.8);
-        assert_eq!(r.familiarity, 0.8);
+        let before = r.familiarity;
+        r.on_time_together(1.0);
+        assert!(r.familiarity - before < first);
+        assert!(r.familiarity <= 1.0);
+        assert_eq!((r.trust, r.affection), (0.3, 0.0), "trust and affection are its mind's to change");
     }
 }

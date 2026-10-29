@@ -143,7 +143,7 @@ fn puzzling_words(s: &PetState) -> Vec<String> {
         })
         .map(|(w, st)| (w, st.exposures))
         .collect();
-    words.sort_by(|a, b| b.1.cmp(&a.1));
+    words.sort_by_key(|w| std::cmp::Reverse(w.1));
     words.into_iter().take(5).map(|(w, _)| w.clone()).collect()
 }
 
@@ -317,7 +317,7 @@ mod tests {
 
     fn talking_pet(stage: u8) -> PetState {
         let mut s = PetState::new_egg(0, 5);
-        s.stage = LifeStage::Developing;
+        s.stage = LifeStage::Child;
         s.language_stage = stage;
         s
     }

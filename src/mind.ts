@@ -1,13 +1,17 @@
-// Mind window: a live graph of the pet's real decision inputs and scores.
-// All numbers come from the Rust simulation; nothing here is invented.
+// Mind window: the pet's feeling now beside the live pet, its growing mind,
+// inner monologue, what it has learned and what changed it, and (folded
+// away) the live graph of its real decision inputs and scores. All of it
+// comes from the Rust simulation and the pet's own mind; nothing is invented.
 
 import { invoke } from "@tauri-apps/api/core";
 import "./prefs";
 import { clickSounds } from "./sfx";
-import type { Intention, MindView } from "./types";
+import { icon } from "./icons";
+import { mountLivePet } from "./livepet";
+import { stageLabel, type Intention, type MindView } from "./types";
+import { render } from "./ui";
 
 const REFRESH_MS = 1000;
-const svg = document.getElementById("graph")!;
 
 const INTENTION_LABEL: Record<Intention, string> = {
   idle: "Idle",
@@ -37,7 +41,7 @@ const INTENTION_PHRASE: Record<Intention, string> = {
 const FACTORS = [
   "energy", "fullness", "fun", "company", "stimulation",
   "playfulness", "sociality", "curiosity", "competitiveness", "caution", "independence",
-  "bond", "watching", "goal", "mood", "night",
+  "bond", "watching", "goal", "mood", "feeling", "night",
 ];
 
 function esc(s: string): string {
@@ -56,6 +60,7 @@ function factorValue(m: MindView, f: string): number {
     case "night": return m.night ? 1 : 0;
     case "watching": return m.watching ? 1 : 0;
     case "mood": return m.plan ? 1 : 0;
+    case "feeling": return m.feeling?.intensity ?? 0;
     case "goal": return m.goal ? m.goal.progress / Math.max(1, m.goal.target) : 0;
     default: return (m.personality as Record<string, number>)[f] ?? 0;
   }
@@ -66,6 +71,7 @@ function isNeed(f: string): boolean {
 }
 
 function drawGraph(m: MindView): void {
+  const svg = document.getElementById("graph")!;
   const leftX = 120;
   const midX = 350;
   const petX = 575;
@@ -97,7 +103,7 @@ function drawGraph(m: MindView): void {
   const factors = FACTORS.map((f) => {
     const v = factorValue(m, f);
     const y = fy(f);
-    const kind = isNeed(f) ? "need" : ["night", "watching"].includes(f) ? "time" : f === "bond" ? "bond" : f === "goal" || f === "mood" ? "goal" : "trait";
+    const kind = isNeed(f) ? "need" : ["night", "watching"].includes(f) ? "time" : f === "bond" ? "bond" : ["goal", "mood", "feeling"].includes(f) ? "goal" : "trait";
     return `<g class="factor ${kind}">
       <text x="${leftX - 8}" y="${y + 4}" text-anchor="end">${f}</text>
       <rect class="track" x="${leftX}" y="${y - 5}" width="64" height="10" rx="3"/>
@@ -140,18 +146,65 @@ function drawGraph(m: MindView): void {
     </g>`;
 }
 
+// ---------- the window ----------
+
+const POSITIVE = ["happy", "content", "excited", "playful", "proud", "grateful", "loving", "curious", "surprised", "calm"];
+
+function tone(emotion: string | null): string {
+  if (!emotion) return "";
+  return POSITIVE.includes(emotion) ? "good" : "bad";
+}
+
+function shell(): void {
+  document.getElementById("app")!.innerHTML = `
+    <section class="px-box now-card">
+      <canvas id="live-pet" class="live-pet" role="img" aria-label="Your pet right now"></canvas>
+      <div>
+        <h1 id="now"></h1>
+        <div id="feeling"></div>
+        <p id="why" class="muted"></p>
+      </div>
+    </section>
+    <div class="columns">
+      <div class="col">
+        <section class="px-box"><h2>${icon("brain")} Its growing mind</h2><div id="maturity"></div></section>
+        <section class="px-box"><h2>${icon("bubble")} Inner monologue</h2><ol id="monologue" class="bubbles"></ol></section>
+        <section class="px-box"><h2>${icon("heart")} What changed it</h2><ul id="changes" class="changes"></ul></section>
+      </div>
+      <div class="col">
+        <section class="px-box"><h2>${icon("book")} What it has learned</h2><ul id="beliefs" class="journal"></ul></section>
+        <section class="px-box"><h2>${icon("star")} Its day</h2><div id="own-mind"></div></section>
+        <section class="px-box"><h2>${icon("leaf")} Growing up</h2><div id="growth"></div></section>
+        <section class="px-box"><h2>${icon("eye")} Knows &amp; noticed</h2>
+          <h3>Words</h3><p id="words" class="muted"></p>
+          <h3>About you</h3><ul id="interests"></ul>
+          <h3>Memories</h3><ul id="memories"></ul>
+        </section>
+      </div>
+    </div>
+    <details class="px-box advanced">
+      <summary class="pixel">How it decides (advanced)</summary>
+      <svg id="graph" viewBox="0 0 680 560" role="img" aria-label="Decision graph"></svg>
+      <p class="legend muted">Left: what the pet feels and is like. Middle: options it is weighing (bigger = stronger urge).
+        Lines show what pushes each option; dashed red lines hold it back. Right: what it has learned.</p>
+      <h3>Event stream</h3>
+      <ol id="thoughts"></ol>
+    </details>`;
+  mountLivePet(document.getElementById("live-pet") as HTMLCanvasElement);
+}
+
 function describe(m: MindView): void {
   const name = m.name ?? "Your pet";
   const now = document.getElementById("now")!;
   const why = document.getElementById("why")!;
   if (m.stage === "egg") {
-    now.textContent = "Still an egg — dreaming.";
-    why.textContent = "Decisions begin after hatching.";
+    now.textContent = "Still an egg, dreaming.";
+    why.textContent = "Its mind wakes when it hatches.";
     return;
   }
   if (m.reaction) {
     now.textContent = `${name} is reacting: ${m.reaction}.`;
-    why.textContent = "Reactions to what just happened pause normal decisions for a moment.";
+    why.textContent = "A quick reflex; its mind is still deciding how it feels about it.";
     return;
   }
   now.textContent = `${name} ${INTENTION_PHRASE[m.intention]}.`;
@@ -177,7 +230,93 @@ const GOAL_WORDS: Record<string, string> = {
   watch_together: "watch something with you",
 };
 
-/** What its language-model mind thought: form, plan, beliefs, and what it's thinking now. */
+const WANT_PHRASE: Record<Intention, string> = {
+  idle: "to do nothing much",
+  sit: "to rest",
+  wander: "to wander",
+  explore: "to explore",
+  sleep: "to sleep",
+  ask_for_food: "to eat",
+  ask_for_play: "to play",
+  seek_user: "to be with you",
+  watch: "to watch with you",
+};
+
+const CHANGE_WORD: Record<string, string> = { trust: "Trust", affection: "Affection", familiarity: "Familiarity" };
+
+const time = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+const day = (ms: number) => new Date(ms).toLocaleDateString([], { month: "short", day: "numeric" });
+
+/** How it feels now, why, and what it wants. */
+function feeling(m: MindView): void {
+  const f = m.feeling;
+  const missing = m.mind_ready ? "" : `<p class="pixel thinking-now">Its mind isn't installed, so it sleeps. Get it in Status &gt; Settings &gt; Its mind.</p>`;
+  const now = f
+    ? `<p class="feeling-big"><span class="emotion ${tone(f.emotion)}">${esc([f.strength, f.emotion].filter(Boolean).join(" "))}</span>
+         ${f.want ? `<span class="muted">and wants ${WANT_PHRASE[f.want]}</span>` : ""}</p>
+       <p class="muted">Because: ${esc(f.cause)} <span class="dim">(about ${Math.max(1, Math.round(f.left_secs / 60))} more min)</span></p>`
+    : `<p class="feeling-big"><span class="emotion">calm</span> <span class="muted">no strong feeling right now</span></p>`;
+  const waiting = m.to_feel.length ? `<p class="muted dim">Still to feel about: ${m.to_feel.map(esc).join(" · ")}</p>` : "";
+  const thinking = m.thinking ? `<p class="pixel thinking-now">${icon("bubble")} Thinking: ${esc(m.thinking)}…</p>` : "";
+  render("feeling", missing + now + waiting + thinking);
+}
+
+/** How grown-up its mind is: a stage, a bar towards the next, and its instincts. */
+function maturity(m: MindView): void {
+  const g = m.maturity;
+  const progress = g.next
+    ? `<div class="progress" role="progressbar" aria-valuenow="${g.lessons}" aria-valuemin="0" aria-valuemax="${g.next.lessons}">
+         <div style="width:${Math.min(100, Math.round((g.lessons / g.next.lessons) * 100))}%"></div></div>
+       <p class="muted">${g.lessons} of ${g.next.lessons} lessons to a <strong>${g.next.stage}</strong> mind (and at least ${stageLabel(g.next.life_stage)}).</p>`
+    : `<p class="muted">Its mind is fully grown.</p>`;
+  render(
+    "maturity",
+    `<p class="stage-name pixel">${esc(g.stage)}</p>
+    <p class="muted">${esc(g.how)}</p>
+    ${progress}
+    <p class="muted dim">It holds ${g.lessons_in_mind} of its lessons in mind at once.</p>
+    <details data-key="instincts"><summary class="muted">born knowing…</summary><ul>${g.instincts.map((i) => `<li>${esc(i)}</li>`).join("")}</ul></details>`,
+  );
+}
+
+/** Its inner monologue as thought bubbles, and what its feelings changed. */
+function heart(m: MindView): void {
+  render(
+    "monologue",
+    m.monologue
+      .slice(0, 12)
+      .map(
+        (t) => `<li><div class="bubble">${esc(t.text)}</div>
+          <div class="meta">${t.emotion ? `<span class="emotion ${tone(t.emotion)}">${esc(t.emotion)}</span> ` : ""}<time>${time(t.at_ms)}</time></div></li>`,
+      )
+      .join("") || `<li class="muted">Nothing yet. It thinks to itself as it feels about what happens.</li>`,
+  );
+  render(
+    "changes",
+    m.changes
+      .slice(0, 8)
+      .map((c) => `<li><span class="arrow ${c.dir > 0 ? "good" : "bad"}">${c.dir > 0 ? "▲" : "▼"}</span> <strong>${esc(CHANGE_WORD[c.what] ?? c.what)}</strong>
+          <span class="muted">because ${esc(c.because.replace(/\.$/, "").toLowerCase())}</span></li>`)
+      .join("") || `<li class="muted">Nothing yet. Its mind changes its bond and personality a little at a time, from what happens.</li>`,
+  );
+}
+
+/** What it has learned, as a journal, newest first. */
+function journal(m: MindView): void {
+  render(
+    "beliefs",
+    [...m.beliefs]
+      .sort((a, b) => b.updated_ms - a.updated_ms)
+      .map(
+        (b) => `<li><p>${esc(b.text)}</p>
+          <div class="meta"><time>${day(b.updated_ms)}</time> · ${Math.round(b.confidence * 100)}% sure
+          <details data-key="${esc(b.text)}"><summary class="muted">because…</summary><ul>${b.evidence.map((e) => `<li>${esc(e)}</li>`).join("")}</ul></details></div></li>`,
+      )
+      .join("") || `<li class="muted">Nothing yet: it only knows its instincts. It learns by looking back on what happened to it.</li>`,
+  );
+}
+
+/** Its plan for the day, its form, and whether it's about to evolve. */
 function ownMind(m: MindView): void {
   const parts: string[] = [];
   if (m.form) parts.push(`<p><strong>${esc(m.form.name)}</strong>: <span class="muted">${esc(m.form.story)}</span></p>`);
@@ -186,44 +325,41 @@ function ownMind(m: MindView): void {
     if (m.plan.lines.length) parts.push(`<p class="muted">Might say: ${m.plan.lines.map((l) => `“${esc(l)}”`).join(" ")}</p>`);
   }
   if (m.evolving) parts.push(`<p class="pixel thinking-now">Ready to evolve. Its mind is designing its new form…</p>`);
-  else if (m.thinking) parts.push(`<p class="pixel thinking-now">Thinking: ${esc(m.thinking)}…</p>`);
-  document.getElementById("own-mind")!.innerHTML =
-    parts.join("") || `<p class="muted">Its mind thinks with the language model while it lives: planning its day, reflecting on memories, and designing how it evolves.</p>`;
-  document.getElementById("beliefs")!.innerHTML =
-    m.beliefs
-      .map(
-        (b) => `<li><span>${esc(b.text)}</span> <span class="muted">(${Math.round(b.confidence * 100)}% sure)</span>
-          <details><summary class="muted">because…</summary><ul>${b.evidence.map((e) => `<li>${esc(e)}</li>`).join("")}</ul></details></li>`,
-      )
-      .join("") || `<li class="muted">No beliefs yet. It forms them by reflecting on its memories.</li>`;
+  render("own-mind", parts.join("") || `<p class="muted">No plan yet. It plans its day twice a day.</p>`);
 }
 
 function growth(m: MindView): void {
   const g = m.growth;
   const clock = new Date(m.sim_time_ms).toLocaleString([], { weekday: "short", hour: "2-digit", minute: "2-digit" });
   const next = g.next
-    ? `Next: <strong>${g.next}</strong> — ${Math.round(g.readiness * 100)}% ready (needs 90%, and ${Math.round(g.min_stage_hours)} h in this stage: ${Math.floor(g.stage_hours)} h so far).`
-    : m.stage === "advanced"
-      ? "Fully grown."
-      : "Grows once it's older and well cared for.";
-  document.getElementById("growth")!.innerHTML =
-    `<p>${next}</p><p class="muted">Its clock: ${esc(clock)}${m.night ? " (night)" : ""}</p>` +
-    (m.pending_question ? `<p>Waiting for your answer: <strong>${esc(m.pending_question)}</strong></p>` : "") +
-    (m.user_name ? `<p class="muted">Knows your name: ${esc(m.user_name)}</p>` : "");
+    ? `<div class="progress" role="progressbar" aria-valuenow="${Math.round(g.readiness * 100)}" aria-valuemin="0" aria-valuemax="90">
+         <div style="width:${Math.min(100, Math.round((g.readiness / 0.9) * 100))}%"></div></div>
+       <p>Next: <strong>${esc(g.next)}</strong>, ${Math.round(g.readiness * 100)}% ready <span class="muted">(needs 90%, and ${Math.round(g.min_stage_hours)} h in this stage: ${Math.floor(g.stage_hours)} h so far)</span></p>`
+    : m.stage === "apex"
+      ? "<p>Fully grown.</p>"
+      : "<p>Grows once it's older and well cared for.</p>";
+  // Why it last changed: reasons from its real life, never made up (spec §44).
+  const last = [...g.history].reverse().find((h) => h.reasons.length);
+  const why = last
+    ? `<p>Last time it grew (${esc(last.from)} → ${esc(last.to)}):</p><ul>${last.reasons.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>`
+    : "";
+  render(
+    "growth",
+    `${next}${why}<p class="muted dim">Its clock: ${esc(clock)}${m.night ? " (night)" : ""}</p>` +
+      (m.pending_question ? `<p>Waiting for your answer: <strong>${esc(m.pending_question)}</strong></p>` : "") +
+      (m.user_name ? `<p class="muted">Knows your name: ${esc(m.user_name)}</p>` : ""),
+  );
 }
 
 function lists(m: MindView): void {
-  const time = (ms: number) => new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  document.getElementById("thoughts")!.innerHTML =
-    m.thoughts.map((t) => `<li><time>${time(t.at_ms)}</time> ${esc(t.text)}</li>`).join("") || `<li class="muted">Nothing yet.</li>`;
-  document.getElementById("words")!.textContent = m.words.length
-    ? m.words.join(", ")
-    : "No words yet — only sounds.";
-  document.getElementById("interests")!.innerHTML =
+  render("thoughts", m.thoughts.map((t) => `<li><time>${time(t.at_ms)}</time> ${esc(t.text)}</li>`).join("") || `<li class="muted">Nothing yet.</li>`);
+  render("words", m.words.length ? esc(m.words.join(", ")) : "No words yet, only sounds.");
+  render(
+    "interests",
     m.interests.map((i) => `<li>${esc(i.phrase)} <span class="muted">(${i.level}, ${Math.round(i.confidence * 100)}%)</span></li>`).join("") ||
-    `<li class="muted">Nothing certain yet.</li>`;
-  document.getElementById("memories")!.innerHTML =
-    m.memories.map((x) => `<li>${esc(x.summary)}</li>`).join("") || `<li class="muted">No memories yet.</li>`;
+      `<li class="muted">Nothing certain yet.</li>`,
+  );
+  render("memories", m.memories.map((x) => `<li>${esc(x.summary)}</li>`).join("") || `<li class="muted">No memories yet.</li>`);
 }
 
 async function refresh(): Promise<void> {
@@ -231,15 +367,21 @@ async function refresh(): Promise<void> {
     const m = await invoke<MindView>("get_mind");
     document.title = `${m.name ?? "Pet"} — what is it thinking?`;
     describe(m);
-    drawGraph(m);
+    feeling(m);
+    maturity(m);
+    heart(m);
+    journal(m);
     ownMind(m);
     growth(m);
     lists(m);
+    // The graph is only drawn while it's open.
+    if ((document.querySelector("details.advanced") as HTMLDetailsElement).open) drawGraph(m);
   } catch (e) {
     document.getElementById("now")!.textContent = `Could not read the pet's mind: ${e}`;
   }
 }
 
+shell();
 clickSounds();
 void refresh();
 setInterval(refresh, REFRESH_MS);
