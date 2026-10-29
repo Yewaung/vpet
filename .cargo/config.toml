@@ -2,4 +2,6 @@
 # Adjust if LLVM / VS Build Tools live elsewhere.
 [env]
 LIBCLANG_PATH = 'C:\Program Files\LLVM\bin'
-CMAKE = 'C:\Program Files (x86)\Microsoft Visual Studio\2022\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe'
+# VS 2026's CMake: cc >= 1.10 picks the "Visual Studio 18 2026" generator
+# when that install exists, and VS 2022's CMake (3.31) doesn't know it.
+CMAKE = 'C:\Program Files (x86)\Microsoft Visual Studio\18\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe'

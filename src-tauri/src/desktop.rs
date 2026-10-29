@@ -18,12 +18,47 @@ pub struct Bounds {
     pub bottom: f64,
 }
 
+/// A screen edge (where a taskbar sits).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Edge {
+    Left,
+    Top,
+    Right,
+    Bottom,
+}
+
+/// Screen pixels (at 100% scaling) kept free along an auto-hiding taskbar's
+/// edge, so the pet never sits on the strip that brings the taskbar back.
+pub const AUTOHIDE_GAP: f64 = 3.0;
+
+/// The work area minus a thin gap along an auto-hiding taskbar on this
+/// monitor. (A visible taskbar is already outside the work area.)
+pub fn leave_room_for_taskbar(b: Bounds, taskbar: Option<(Edge, Bounds)>, scale: f64) -> Bounds {
+    let Some((edge, t)) = taskbar else { return b };
+    let gap = AUTOHIDE_GAP * scale.max(1.0);
+    // Only the monitor the taskbar is on: it spans this work area along its
+    // edge, and that edge lies within one taskbar-thickness of ours.
+    let across = |lo: f64, hi: f64, a: f64, b: f64| lo < b && hi > a;
+    let (tall, wide) = (t.bottom - t.top, t.right - t.left);
+    let mut out = b;
+    match edge {
+        Edge::Bottom if across(t.left, t.right, b.left, b.right) && (t.bottom - b.bottom).abs() <= tall => out.bottom -= gap,
+        Edge::Top if across(t.left, t.right, b.left, b.right) && (t.top - b.top).abs() <= tall => out.top += gap,
+        Edge::Left if across(t.top, t.bottom, b.top, b.bottom) && (t.left - b.left).abs() <= wide => out.left += gap,
+        Edge::Right if across(t.top, t.bottom, b.top, b.bottom) && (t.right - b.right).abs() <= wide => out.right -= gap,
+        _ => {}
+    }
+    out
+}
+
 pub struct Motion {
     /// Window top-left.
     pub x: f64,
     pub y: f64,
     pub w: f64,
     pub h: f64,
+    /// Height of the pet itself (the bottom square of the window; above it is room for its bubble).
+    pub body: f64,
     vy: f64,
     target: Option<f64>,
     pause: f64,
@@ -33,6 +68,12 @@ pub struct Motion {
     pub loco: Locomotion,
     /// Sleeping or sitting: flyers land.
     pub resting: bool,
+    /// Reduced motion: no wandering off, no hops, bobbing or flight.
+    pub calm: bool,
+    /// The user is working in another app: keep to the nearest bottom corner.
+    away: bool,
+    /// Put somewhere by hand while the user was away: stay there.
+    placed_away: bool,
     /// Visual lift above the ground line (hops, swim waves, flight).
     lift: f64,
     /// Flight altitude above the floor, and where it's heading.
@@ -50,6 +91,7 @@ impl Motion {
             y,
             w,
             h,
+            body: h,
             vy: 0.0,
             target: None,
             pause: 0.0,
@@ -57,6 +99,9 @@ impl Motion {
             moving: false,
             loco: Locomotion::Walk,
             resting: false,
+            calm: false,
+            away: false,
+            placed_away: false,
             lift: 0.0,
             alt: 0.0,
             alt_target: 0.0,
@@ -72,7 +117,7 @@ impl Motion {
 
     /// Highest a flyer goes above the taskbar.
     fn max_alt(&self, b: &Bounds) -> f64 {
-        ((b.bottom - b.top) * 0.45).min(self.h * 2.5).max(0.0)
+        ((b.bottom - b.top) * 0.45).min(self.body * 2.5).max(0.0)
     }
 
     fn floor_y(&self, b: &Bounds) -> f64 {
@@ -84,8 +129,17 @@ impl Motion {
         self.loco != Locomotion::Fly && self.base() < self.floor_y(b) - 0.5
     }
 
+    /// Another app has focus (true) or the desktop does (false).
+    pub fn set_away(&mut self, away: bool) {
+        if !away {
+            self.placed_away = false;
+        }
+        self.away = away;
+    }
+
     /// Picks up / puts down the window directly (dragging).
     pub fn place(&mut self, x: f64, y: f64) {
+        self.placed_away = self.away;
         self.x = x;
         self.y = y;
         self.lift = 0.0;
@@ -97,16 +151,32 @@ impl Motion {
 
     /// True when the next frame needs smooth updates.
     pub fn active(&self, b: &Bounds, movement: Movement) -> bool {
+        let movement = self.allowed(movement);
         let flying = self.loco == Locomotion::Fly && (self.alt - self.wanted_alt()).abs() > 1.0;
         self.falling(b) || flying || self.moving || self.lift > 0.5 || (movement != Movement::Stay && self.pause <= 0.0)
     }
 
     fn wanted_alt(&self) -> f64 {
-        if self.resting { 0.0 } else { self.alt_target }
+        if self.resting || self.calm || self.away {
+            0.0
+        } else {
+            self.alt_target
+        }
+    }
+
+    /// With reduced motion the pet stays put unless you call it over.
+    /// While you work in another app it keeps to its corner.
+    fn allowed(&self, movement: Movement) -> Movement {
+        match movement {
+            _ if self.away => Movement::Stay,
+            Movement::Wander | Movement::Explore if self.calm => Movement::Stay,
+            m => m,
+        }
     }
 
     /// Advances one frame. `speed` is px/s; `cursor` is the cursor position.
     pub fn step(&mut self, dt: f64, movement: Movement, speed: f64, cursor: Option<(f64, f64)>, b: &Bounds) {
+        let movement = self.allowed(movement);
         let floor = self.floor_y(b);
         let max_x = (b.right - self.w).max(b.left);
         let mut base = self.base();
@@ -120,7 +190,7 @@ impl Motion {
             // Flying to the cursor means flying up to its height too.
             if movement == Movement::ApproachCursor {
                 if let Some((_, cy)) = cursor {
-                    self.alt_target = (floor + self.h * 0.5 - cy).clamp(0.0, self.max_alt(b));
+                    self.alt_target = (floor + self.h - self.body * 0.5 - cy).clamp(0.0, self.max_alt(b));
                 }
             }
             let want = self.wanted_alt();
@@ -138,6 +208,13 @@ impl Motion {
         self.x = self.x.clamp(b.left, max_x);
 
         let (target, speed) = match movement {
+            // Working in another app: off to the nearer bottom corner, then it
+            // stays. Never while it sleeps or sits: it goes once it's up again.
+            Movement::Stay if self.away && !self.placed_away && !self.resting => {
+                self.target = None;
+                let goal = if self.x + self.w / 2.0 < (b.left + b.right) / 2.0 { b.left } else { max_x };
+                (Some(goal), speed)
+            }
             Movement::Stay => {
                 self.target = None;
                 (None, speed)
@@ -193,6 +270,9 @@ impl Motion {
 
     /// Vertical offset for this body's way of moving.
     fn gait(&mut self, dt: f64, speed: f64) -> f64 {
+        if self.calm {
+            return self.alt;
+        }
         match self.loco {
             Locomotion::Fly => {
                 let bob = if self.alt > 2.0 { self.phase.sin() * 3.0 } else { 0.0 };
@@ -206,11 +286,11 @@ impl Motion {
                 } else {
                     self.phase = 0.0;
                 }
-                self.phase.sin().abs() * self.h * 0.14
+                self.phase.sin().abs() * self.body * 0.14
             }
             Locomotion::Swim => {
                 self.phase += dt * if self.moving { 5.0 } else { 1.5 };
-                (1.0 + self.phase.sin()) * self.h * if self.moving { 0.04 } else { 0.012 }
+                (1.0 + self.phase.sin()) * self.body * if self.moving { 0.04 } else { 0.012 }
             }
             Locomotion::Walk | Locomotion::Run | Locomotion::Crawl => 0.0,
         }
@@ -236,6 +316,46 @@ mod tests {
         }
         assert_eq!(m.y, 840.0);
         assert!(!m.falling(&B));
+    }
+
+    #[test]
+    fn working_in_another_app_sends_it_to_the_nearer_corner() {
+        let mut m = Motion::new(1100.0, 840.0, 200.0, 200.0, 4);
+        m.set_away(true);
+        for _ in 0..1200 {
+            m.step(1.0 / 30.0, Movement::ApproachCursor, 80.0, Some((300.0, 500.0)), &B);
+        }
+        assert_eq!(m.x, 1720.0, "right half: bottom-right corner, ignoring the cursor");
+        // Put somewhere by hand, it stays there while you keep working.
+        m.place(800.0, 840.0);
+        for _ in 0..300 {
+            m.step(1.0 / 30.0, Movement::Wander, 80.0, None, &B);
+        }
+        assert_eq!(m.x, 800.0);
+        // Back on the desktop, it follows the cursor again.
+        m.set_away(false);
+        for _ in 0..600 {
+            m.step(1.0 / 30.0, Movement::ApproachCursor, 80.0, Some((300.0, 900.0)), &B);
+        }
+        assert!(m.x < 400.0, "follows the cursor: {}", m.x);
+    }
+
+    #[test]
+    fn a_sleeping_pet_stays_put_even_while_you_work() {
+        let mut m = Motion::new(1100.0, 840.0, 200.0, 200.0, 4);
+        m.set_away(true);
+        m.resting = true;
+        for _ in 0..600 {
+            m.step(1.0 / 30.0, Movement::Stay, 80.0, None, &B);
+            assert!(!m.moving, "it never walks in its sleep");
+        }
+        assert_eq!(m.x, 1100.0);
+        // Awake again, it heads to its corner.
+        m.resting = false;
+        for _ in 0..1200 {
+            m.step(1.0 / 30.0, Movement::Stay, 80.0, None, &B);
+        }
+        assert_eq!(m.x, 1720.0);
     }
 
     #[test]
@@ -283,6 +403,34 @@ mod tests {
             assert!(!m.falling(&B), "a hop is not a fall");
         }
         assert!(highest < 835.0);
+    }
+
+    #[test]
+    fn calm_pets_stay_put_and_stay_grounded() {
+        let mut m = Motion::new(500.0, 840.0, 200.0, 200.0, 5);
+        m.loco = Locomotion::Fly;
+        m.calm = true;
+        for _ in 0..600 {
+            m.step(1.0 / 30.0, Movement::Explore, 80.0, None, &B);
+        }
+        assert_eq!((m.x, m.y), (500.0, 840.0), "no wandering and no flight");
+        assert!(!m.active(&B, Movement::Wander), "nothing to animate");
+        for _ in 0..2000 {
+            m.step(1.0 / 30.0, Movement::ApproachCursor, 80.0, Some((1500.0, 900.0)), &B);
+        }
+        assert!(m.x > 1100.0, "but it still comes when called");
+    }
+
+    #[test]
+    fn a_thin_strip_stays_free_for_an_auto_hiding_taskbar() {
+        let bottom_bar = Some((Edge::Bottom, Bounds { left: 0.0, top: 1000.0, right: 1920.0, bottom: 1040.0 }));
+        assert_eq!(leave_room_for_taskbar(B, bottom_bar, 1.5).bottom, 1040.0 - AUTOHIDE_GAP * 1.5);
+        let left_bar = Some((Edge::Left, Bounds { left: 0.0, top: 0.0, right: 48.0, bottom: 1040.0 }));
+        assert_eq!(leave_room_for_taskbar(B, left_bar, 1.0).left, AUTOHIDE_GAP);
+        // The taskbar lives on another monitor: this one is untouched.
+        let elsewhere = Some((Edge::Bottom, Bounds { left: 1920.0, top: 1400.0, right: 4480.0, bottom: 1440.0 }));
+        assert_eq!(leave_room_for_taskbar(B, elsewhere, 1.0), B);
+        assert_eq!(leave_room_for_taskbar(B, None, 1.0), B);
     }
 
     #[test]

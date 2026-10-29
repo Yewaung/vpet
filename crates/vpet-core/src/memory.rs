@@ -172,12 +172,20 @@ impl MemoryFormer {
                 let summary = format!("I wanted to {}, and I did it!", goal.phrase());
                 self.first(&format!("goal:{}", goal.key()), Episodic, 4, &summary, at)
             }
-            PetEvent::Evolved { to, description, form_name, .. } => Some(Memory {
+            PetEvent::Evolved { to, description, form_name, reasons, .. } => Some(Memory {
                 kind: Episodic,
                 tag: format!("stage:{}", to.key()),
-                summary: match form_name {
-                    Some(name) => format!("I evolved into {name}, a {} creature. {description}", stage_label(*to)),
-                    None => format!("I evolved into a {} creature. {description}", stage_label(*to)),
+                summary: {
+                    let why = reasons.iter().take(2).map(String::as_str).collect::<Vec<_>>().join(" ");
+                    let told = match form_name {
+                        Some(name) => format!("I evolved into {name}, a {} creature. {description}", stage_label(*to)),
+                        None => format!("I evolved into a {} creature. {description}", stage_label(*to)),
+                    };
+                    if why.is_empty() {
+                        told
+                    } else {
+                        format!("{told} {why}")
+                    }
                 },
                 importance: 5,
                 created_at_ms: at,
@@ -244,15 +252,8 @@ impl MemoryFormer {
     }
 }
 
-fn stage_label(s: LifeStage) -> &'static str {
-    match s {
-        LifeStage::Egg => "egg",
-        LifeStage::Baby => "baby",
-        LifeStage::Developing => "developing",
-        LifeStage::Young => "young",
-        LifeStage::Mature => "mature",
-        LifeStage::Advanced => "advanced",
-    }
+fn stage_label(s: LifeStage) -> String {
+    s.label().to_lowercase()
 }
 
 #[cfg(test)]

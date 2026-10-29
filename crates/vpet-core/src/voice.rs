@@ -11,15 +11,11 @@ const GROWN_DROP_SEMITONES: f64 = 9.0;
 const GENE_SEMITONES: f64 = 3.0;
 const DEFAULT_PITCH_GENE: f64 = 0.8;
 
-/// How grown-up the voice is, in [0, 1].
+/// How grown-up the voice is, in [0, 1]: it settles by the Ultimate stage.
 pub fn maturity(stage: LifeStage) -> f64 {
-    match stage {
-        LifeStage::Egg | LifeStage::Baby => 0.0,
-        LifeStage::Developing => 0.3,
-        LifeStage::Young => 0.6,
-        LifeStage::Mature => 0.9,
-        LifeStage::Advanced => 1.0,
-    }
+    let steps = stage.number().saturating_sub(LifeStage::Baby.number()) as f64;
+    let full = (LifeStage::Ultimate.number() - LifeStage::Baby.number()) as f64;
+    (steps / full).min(1.0)
 }
 
 /// Base pitch of the pet's beeps right now.
@@ -35,10 +31,11 @@ mod tests {
 
     #[test]
     fn beeps_get_lower_as_the_pet_grows() {
-        let stages = [LifeStage::Baby, LifeStage::Developing, LifeStage::Young, LifeStage::Mature, LifeStage::Advanced];
+        let stages = &LifeStage::ALL[1..8];
         let hz: Vec<f64> = stages.iter().map(|s| chirp_hz(*s, 0.8)).collect();
         assert!(hz.windows(2).all(|w| w[1] < w[0]));
         assert!((hz[0] - BABY_HZ).abs() < 1e-9);
+        assert_eq!(chirp_hz(LifeStage::Apex, 0.8), chirp_hz(LifeStage::Ultimate, 0.8), "settled");
     }
 
     #[test]

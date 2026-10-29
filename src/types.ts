@@ -3,19 +3,76 @@
 import type { SoundSettings } from "./sfx";
 export type { SoundSettings };
 
-export type LifeStage = "egg" | "baby" | "developing" | "young" | "mature" | "advanced";
+/** Twelve stages: egg, baby and young ("child") keep the egg's look; the rest are evolved forms. */
+export type LifeStage =
+  | "egg" | "baby" | "child"
+  | "rookie" | "adept" | "champion" | "veteran" | "ultimate" | "mega" | "legend" | "mythic" | "apex";
+
+export const STAGES: LifeStage[] = ["egg", "baby", "child", "rookie", "adept", "champion", "veteran", "ultimate", "mega", "legend", "mythic", "apex"];
+
+/** 1 (egg) to 12 (apex). */
+export const stageNumber = (s: LifeStage) => STAGES.indexOf(s) + 1;
+export const isEvolved = (s: LifeStage) => stageNumber(s) >= 4;
+export const stageLabel = (s: LifeStage) => (s === "child" ? "Young" : s[0].toUpperCase() + s.slice(1));
+
+export type BodyPlan = "native" | "biped" | "mech" | "serpent" | "spirit";
+export type Element = "fire" | "water" | "wind" | "electric" | "nature";
+export type Gear =
+  | "headphones" | "goggles" | "glasses" | "cap" | "beret" | "bandana" | "crown" | "flower_crown" | "scarf" | "bowtie" | "tie";
+export type Wings = "feather" | "bat" | "insect" | "energy";
+export type Cyborg = "leg" | "arm" | "eye";
+export type FinalForm =
+  | "titan" | "celestial" | "abyss" | "dragon" | "mecha" | "beast_king" | "spirit" | "cosmic"
+  | "ancient" | "ascendant" | "human" | "angel" | "kaiju" | "plant" | "orb";
+export type Armor = "spiked" | "plated" | "sash";
+export type Weapon = "cannon" | "staff";
+export type Temperament = "gentle" | "balanced" | "fierce";
+export type Gender = "female" | "male";
+
+/** An evolved form's look, chosen by its life (see style.rs). */
+export interface Style {
+  body: BodyPlan;
+  element: Element | null;
+  gear: Gear[];
+  wings: Wings | null;
+  /** A jetpack. */
+  jets: boolean;
+  cyborg: Cyborg[];
+  weapon: Weapon | null;
+  orb: boolean;
+  temperament: Temperament;
+  gender: Gender | null;
+  eye_hue: number | null;
+  aura: number;
+  /** Markings of its own (from Adept); the pattern comes from `variant`. */
+  markings?: boolean;
+  armor?: Armor | null;
+  /** The great form it has taken (Mega on). */
+  form?: FinalForm | null;
+  past_forms?: FinalForm[];
+  /** Its own variation, from its seed. */
+  variant?: number;
+}
+
+/** An evolution animation in progress: the old body to morph from. */
+export interface Transition {
+  from: LifeStage;
+  from_genome: Genome;
+  at_ms: number;
+}
 
 export type Anim =
   | "egg_idle" | "egg_wobble" | "hatch"
   | "idle" | "sit" | "roam" | "sleep" | "ask"
   | "eat" | "play" | "happy" | "refuse" | "annoyed" | "startled" | "held" | "land"
-  | "watch" | "hide" | "proud" | "cheer";
+  | "watch" | "hide" | "proud" | "cheer"
+  | "charge" | "evolve";
 
 export type Expression =
   | "neutral" | "happy" | "excited" | "sleepy" | "asleep"
   | "hungry" | "sad" | "curious" | "annoyed" | "surprised" | "scared";
 
-export type BubbleIcon = "food" | "play" | "heart" | "sleep" | "question" | "anger" | "music";
+export type BubbleIcon = "food" | "play" | "heart" | "sleep" | "question" | "anger" | "music" | "rest";
 
 export interface Bubble {
   text: string;
@@ -34,6 +91,8 @@ export interface Genome {
   voice: { pitch: number };
   egg: EggKind | null;
   parts: Parts;
+  /** Missing on genomes saved before evolved styles existed. */
+  style?: Style;
 }
 
 export type EggKind = "wind" | "ember" | "earth" | "frost" | "leaf" | "tide" | "dart" | "light" | "ghost";
@@ -60,6 +119,7 @@ export interface Frame {
   walk_speed: number;
   growth: number;
   incubation: number;
+  transition: Transition | null;
   facing: 1 | -1;
   moving: boolean;
   falling: boolean;
@@ -68,6 +128,14 @@ export interface Frame {
   /** Speed-run multiplier while testing (e.g. 60), or null at real time. */
   speed_run: number | null;
   appearance: Appearance;
+  /** For the screen-reader description of the pet. */
+  name: string | null;
+  /** Do not disturb is on right now. */
+  quiet: boolean;
+  /** No language model installed: the pet sleeps until it has its mind. */
+  mind_missing: boolean;
+  /** Reduced motion: no bobbing, bubbles appear at once. */
+  reduce_motion: boolean;
 }
 
 /** Screen pixels per sprite pixel (2-8) and opacity (0.2-1). */
@@ -101,6 +169,10 @@ export interface MemoryEntry {
 }
 
 export interface StatusView extends StatusExtras {
+  /** What it feels right now, thought by its mind. */
+  feeling: FeelingView | null;
+  maturity: MaturityView;
+  thinking: ThinkingView;
   stage: LifeStage;
   generation: number;
   created_at_ms: number;
@@ -150,6 +222,76 @@ export interface StatusExtras {
     has_egg: boolean;
     ancestors: [number, string | null, string, string | null][];
   };
+  /** Set when the save file had to be repaired this session. */
+  recovery: string | null;
+  /** Do not disturb is on right now. */
+  quiet: boolean;
+  identity: {
+    stage_number: number;
+    stage_label: string;
+    gender: Gender | null;
+    temperament: Temperament;
+    style: Style;
+    look: string;
+    flies: boolean;
+  };
+}
+
+/** Hardware profiles (spec §58). */
+export type Profile = "low" | "balanced" | "performance";
+
+export interface Tuning {
+  model: ModelSize;
+  screen_look_secs: number;
+  uses_gpu: boolean;
+  threads: number;
+  context: number;
+}
+
+export interface HardwareView {
+  hardware: {
+    ram_mb: number;
+    cores: number;
+    gpus: { name: string; vram_mb: number; integrated: boolean }[];
+    gpu_build: boolean;
+  };
+  /** null = Auto. */
+  choice: Profile | null;
+  active: Profile;
+  recommended: Profile;
+  profiles: { profile: Profile; tuning: Tuning }[];
+}
+
+export type MotionPref = "system" | "reduced" | "full";
+
+/** Do-not-disturb and motion choices. */
+export interface Comfort {
+  quiet_when_busy: boolean;
+  /** [from hour, to hour), local time; null = off. */
+  quiet_hours: [number, number] | null;
+  hide_when_quiet: boolean;
+  motion: MotionPref;
+  /** Break reminder after this many minutes of continuous use (0 = off). */
+  break_mins: number;
+  /** Daily screen-time reminder after this many hours (0 = off). */
+  daily_hours: number;
+  /** Above other windows (else it sits behind them, on the desktop). */
+  on_top: boolean;
+  /** Clicks pass through it; hold Ctrl to touch it. */
+  click_through: boolean;
+  follow_cursor: boolean;
+  corner_when_working: boolean;
+  talk_on_own: boolean;
+  call_chime: boolean;
+}
+
+export interface UpdateView {
+  current: string;
+  /** This build can verify and install updates. */
+  can_install: boolean;
+  checks_enabled: boolean;
+  last_checked_ms: number | null;
+  available: { version: string; notes: string | null } | null;
 }
 
 export interface ChatLine {
@@ -164,6 +306,8 @@ export interface BrainStatus {
   model_path: string;
   available: boolean;
   loaded: boolean;
+  /** The loaded model runs on the GPU. */
+  on_gpu: boolean;
   chosen: ModelSize;
   models: { size: ModelSize; path: string; available: boolean; megabytes: number }[];
 }
@@ -210,6 +354,43 @@ export interface MindView {
   /** What its mind is working on right now, if anything. */
   thinking: string | null;
   evolving: boolean;
+  /** What it feels right now, thought by its mind. */
+  feeling: FeelingView | null;
+  /** Moments waiting to be felt. */
+  to_feel: string[];
+  /** Its inner monologue, newest first. */
+  monologue: { at_ms: number; text: string; emotion: string | null }[];
+  /** Bond and personality changes its mind made, newest first. */
+  changes: { at_ms: number; what: string; dir: number; because: string }[];
+  mind_ready: boolean;
+  /** How grown-up its mind is, and what it takes to grow further. */
+  maturity: MaturityView;
+}
+
+export interface MaturityView {
+  stage: string;
+  how: string;
+  lessons: number;
+  next: { stage: string; lessons: number; life_stage: LifeStage } | null;
+  lessons_in_mind: number;
+  instincts: string[];
+}
+
+/** Its mind right now: thinking, ready, paused (fullscreen), thinking less on battery, or no mind installed. */
+export interface ThinkingView {
+  state: "thinking" | "ready" | "paused" | "battery" | "no_mind";
+  about: string | null;
+  on_battery: boolean;
+}
+
+export interface FeelingView {
+  emotion: string;
+  /** "a little", "" or "very". */
+  strength: string;
+  intensity: number;
+  cause: string;
+  want: Intention | null;
+  left_secs: number;
 }
 
 /** A conclusion the pet's mind drew from real memories. */
@@ -226,11 +407,30 @@ export interface Form {
   story: string;
 }
 
+/** How the pet looked at one moment, for a portrait. */
+export interface Portrait {
+  stage: LifeStage;
+  genome: Genome;
+}
+
+/** One step of growing up, with portraits and the real reasons (spec §43–44). */
+export interface EvolutionStep {
+  at_ms: number;
+  from: LifeStage;
+  to: LifeStage;
+  changes: [string, number][];
+  before: Portrait | null;
+  after: Portrait | null;
+  form_name: string | null;
+  story: string | null;
+  reasons: string[];
+}
+
 /** How close the pet is to evolving, and its evolution history. */
 export interface GrowthView {
   next: LifeStage | null;
   readiness: number;
   stage_hours: number;
   min_stage_hours: number;
-  history: { at_ms: number; from: string; to: string; changes: [string, number][] }[];
+  history: EvolutionStep[];
 }

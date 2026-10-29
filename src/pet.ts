@@ -1,21 +1,47 @@
-// Pet window: draws frames from Rust as a 64x64 chibi pixel sprite, plays retro
+// Pet window: draws frames from Rust as a colour-V-pet-style pixel sprite (48x48 art), plays retro
 // sound effects for what the pet does, and forwards pointer input.
 // It holds no pet logic of its own.
 
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { t } from "./i18n";
 import "./prefs";
 import { applySoundSettings, sfx } from "./sfx";
+import { evolutionSprite } from "./renderer/evolve";
 import { palette, spriteFor } from "./renderer/sprite";
-import type { RGBA } from "./renderer/pixel";
-import type { Anim, BubbleIcon, Frame, LifeStage } from "./types";
+import { SIZE, type RGBA } from "./renderer/pixel";
+import { stageLabel, type Anim, type BubbleIcon, type Expression, type Frame, type Genome, type LifeStage } from "./types";
 
 const stageEl = document.getElementById("stage")!;
 const bubbleEl = document.getElementById("bubble")!;
 const speedEl = document.getElementById("speed")!;
+const warmthEl = document.getElementById("warmth")!;
+
+/** How the pet looks right now, in words, for screen readers. */
+const FEELINGS: Record<Expression, string> = {
+  neutral: "It looks calm.",
+  happy: "It looks happy.",
+  excited: "It looks excited.",
+  sleepy: "It looks sleepy.",
+  asleep: "It is asleep.",
+  hungry: "It looks hungry.",
+  sad: "It looks sad.",
+  curious: "It looks curious.",
+  annoyed: "It looks annoyed.",
+  surprised: "It looks surprised.",
+  scared: "It looks scared.",
+};
+
+// Windows' "show animations" setting decides reduced motion unless the
+// user overrides it in Settings; Rust needs to know it.
+const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+const reportMotion = () => void invoke("set_system_reduced_motion", { reduced: reducedMotion.matches });
+reducedMotion.addEventListener("change", reportMotion);
+reportMotion();
 const canvas = document.createElement("canvas");
-canvas.width = 64;
-canvas.height = 64;
+// The sprite's pixels; CSS shows it at 64 px times the pet's scale.
+canvas.width = SIZE;
+canvas.height = SIZE;
 stageEl.appendChild(canvas);
 const ctx = canvas.getContext("2d")!;
 
@@ -30,6 +56,7 @@ const ICONS: Record<BubbleIcon, string> = {
   question: "?",
   anger: "💢",
   music: "♪",
+  rest: "☕",
 };
 /** Icons that mean "I want something", announced with an alert beep. */
 const ASKING: BubbleIcon[] = ["food", "play", "question"];
@@ -47,6 +74,7 @@ const ANIM_SOUNDS: Partial<Record<Anim, () => void>> = {
   startled: sfx.startled,
   hide: sfx.scared,
   cheer: sfx.cheer,
+  charge: sfx.charge,
   land: sfx.land,
   sleep: sfx.sleep,
 };
@@ -68,7 +96,7 @@ function onFrame(f: Frame): void {
     animKey = key;
     tick = 0;
   }
-  const ck = JSON.stringify(f.genome.color);
+  const ck = paletteKey(f.genome);
   if (ck !== colorsKey) {
     colorsKey = ck;
     colors = palette(f.genome);
@@ -77,14 +105,63 @@ function onFrame(f: Frame): void {
   playSounds(f);
   frame = f;
   applyAppearance(f);
+  describe(f);
   showBubble(f);
   draw();
 }
 
+/** Screen readers hear who the pet is and how it seems; eggs show their warmth. */
+function describe(f: Frame): void {
+  const pct = Math.round(f.incubation * 100);
+  const egg = f.stage === "egg";
+  stageEl.setAttribute(
+    "aria-label",
+    egg
+      ? t("pet.egg_label", { egg: f.genome.egg ?? "mystery", pct })
+      : t("pet.label", { name: f.name ?? t("pet.your_pet"), stage: stageLabel(f.stage).toLowerCase(), state: FEELINGS[f.expression] }),
+  );
+  // A visible warmth meter, so the wait to hatch has progress to watch.
+  warmthEl.hidden = !(egg && f.genome.egg);
+  warmthEl.setAttribute("aria-valuenow", String(pct));
+  warmthEl.setAttribute("aria-label", t("pet.egg_label", { egg: f.genome.egg ?? "mystery", pct }));
+  (warmthEl.firstElementChild as HTMLElement).style.width = `${pct}%`;
+}
+
+/** Everything the colours depend on. */
+function paletteKey(g: Genome): string {
+  return JSON.stringify([g.color, g.egg, g.style?.element, g.style?.eye_hue]);
+}
+
+/** Colours for another genome (the old body during an evolution), cached. */
+const otherPalettes = new Map<string, RGBA[]>();
+function paletteFor(g: Genome): RGBA[] {
+  const key = paletteKey(g);
+  if (key === colorsKey) return colors;
+  let p = otherPalettes.get(key);
+  if (!p) {
+    if (otherPalettes.size > 4) otherPalettes.clear();
+    p = palette(g);
+    otherPalettes.set(key, p);
+  }
+  return p;
+}
+
+let lastTransition = 0;
+let fanfare: number | undefined;
+
 /** Sounds follow what the pet actually does. The very first frame is silent. */
 function playSounds(f: Frame): void {
   const first = lastAnim === null;
-  if (!first && lastStage !== f.stage && lastStage !== "egg" && f.stage !== "egg") sfx.evolve();
+  if (f.transition && f.transition.at_ms !== lastTransition) {
+    // An evolution: a rising sweep now, the fanfare with the burst of light.
+    lastTransition = f.transition.at_ms;
+    const since = Date.now() - f.transition.at_ms;
+    if (!first && since < 4000) {
+      sfx.charge();
+      clearTimeout(fanfare);
+      fanfare = window.setTimeout(sfx.evolve, 4800 - since);
+    }
+  } else if (!first && lastStage !== f.stage && lastStage !== "egg" && f.stage !== "egg" && !f.transition) sfx.evolve();
   else if (!first && f.anim !== lastAnim) ANIM_SOUNDS[f.anim]?.();
   lastAnim = f.anim;
   lastStage = f.stage;
@@ -97,6 +174,26 @@ function applyAppearance(f: Frame): void {
   root.setProperty("--pet-opacity", String(f.appearance.opacity));
   speedEl.hidden = !f.speed_run;
   speedEl.textContent = f.speed_run ? `x${f.speed_run}` : "";
+  anchorBubble(f);
+}
+
+let anchorKey = "";
+
+/**
+ * Keeps the speech bubble just above the top of the pet (its head, ears,
+ * crown or halo), whatever its form and size, so there's always a gap
+ * between them. Measured from a still pose whenever the look changes.
+ */
+function anchorBubble(f: Frame): void {
+  const key = `${f.stage}|${f.genome.egg}|${f.appearance.pixel_scale}|${JSON.stringify(f.genome.style ?? null)}`;
+  if (key === anchorKey) return;
+  anchorKey = key;
+  const still: Frame = { ...f, anim: f.stage === "egg" ? "egg_idle" : "idle", expression: "neutral", moving: false, falling: false, transition: null };
+  const g = spriteFor(still, 0, false);
+  const top = g.topRow();
+  // Canvas pixels above the bottom, shown at 64 px times the pet's scale.
+  const above = ((SIZE - top) / SIZE) * 64 * f.appearance.pixel_scale;
+  document.documentElement.style.setProperty("--pet-top", `${above.toFixed(1)}px`);
 }
 
 function draw(): void {
@@ -106,8 +203,17 @@ function draw(): void {
     blinkUntil = now + 140;
     nextBlink = now + 2500 + Math.random() * 4000;
   }
-  const grid = spriteFor(frame, tick, now < blinkUntil);
-  ctx.putImageData(grid.toImageData(colors), 0, 0);
+  const t = frame.reduce_motion ? 0 : tick;
+  const blink = now < blinkUntil;
+  // Charging and evolving have their own animation, unless motion is
+  // reduced: then there's no flashing, the new form is simply there.
+  const evo = frame.reduce_motion ? null : evolutionSprite(frame, t, blink, Date.now());
+  if (evo) {
+    ctx.putImageData(evo.grid.toImageData(paletteFor(evo.genome)), 0, 0);
+    return;
+  }
+  // Reduced motion: a still pose (it still blinks).
+  ctx.putImageData(spriteFor(frame, t, blink).toImageData(colors), 0, 0);
 }
 
 // ---------- typewriter speech bubble ----------
@@ -124,13 +230,19 @@ function showBubble(f: Frame): void {
     return;
   }
   const { text, icon } = f.bubble;
-  if (icon && ASKING.includes(icon)) sfx.alert();
+  if (icon && ASKING.includes(icon) && f.sound.chime) sfx.alert();
+  if (icon === "rest") sfx.rest();
   // The hidden full text reserves the bubble's final size while it types out.
   bubbleEl.innerHTML = `${icon ? `<span class="icon icon-${icon}">${ICONS[icon]}</span>` : ""}<span class="text"><span class="shown"></span><span class="ghost"></span></span>`;
   bubbleEl.querySelector(".ghost")!.textContent = text;
   const out = bubbleEl.querySelector<HTMLElement>(".shown")!;
   bubbleEl.hidden = false;
   bubbleEl.classList.remove("pop");
+  if (f.reduce_motion) {
+    // No pop and no typing: the words are simply there.
+    out.textContent = text;
+    return;
+  }
   void bubbleEl.offsetWidth;
   bubbleEl.classList.add("pop");
 
@@ -150,38 +262,11 @@ setInterval(() => {
   draw();
 }, 1000 / FPS);
 
-// Pointer: a click pokes, a drag carries the pet. Rust moves the window.
-const DRAG_THRESHOLD = 4;
-let down: { x: number; y: number } | null = null;
-let dragging = false;
-
-stageEl.addEventListener("pointerdown", (e) => {
-  if (e.button !== 0) return;
-  down = { x: e.clientX, y: e.clientY };
-  dragging = false;
-  stageEl.setPointerCapture(e.pointerId);
-});
-
-stageEl.addEventListener("pointermove", (e) => {
-  if (!down || dragging) return;
-  if (Math.hypot(e.clientX - down.x, e.clientY - down.y) > DRAG_THRESHOLD) {
-    dragging = true;
-    void invoke("drag_start", { x: down.x, y: down.y });
-  }
-});
-
-stageEl.addEventListener("pointerup", () => {
-  if (dragging) void invoke("drag_end");
-  else if (down) void invoke("poke");
-  down = null;
-  dragging = false;
-});
-
-window.addEventListener("contextmenu", (e) => {
-  e.preventDefault();
-  sfx.open();
-  void invoke("show_menu");
-});
+// Clicks, drags and right-clicks on the pet are read from the mouse itself
+// by the pet's loop in Rust (runtime `clicks`), so they work whichever
+// window has focus and on every monitor. The window only keeps the
+// browser's own menu away.
+window.addEventListener("contextmenu", (e) => e.preventDefault());
 
 void listen<Frame>("pet-frame", (e) => onFrame(e.payload));
 void invoke<Frame>("get_frame").then(onFrame);

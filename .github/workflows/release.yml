@@ -1,0 +1,132 @@
+# Tag a version (e.g. `git tag v0.2.0 && git push --tags`) to build the
+# GPU-enabled NSIS installer, sign it, and publish a GitHub release with the
+# `latest.json` the in-app updater reads. See docs/RELEASING.md.
+#
+# Optional repository secrets (the release still builds without them):
+#   WINDOWS_CERTIFICATE           base64 of a code-signing .pfx (Authenticode)
+#   WINDOWS_CERTIFICATE_PASSWORD  its password
+#   TAURI_SIGNING_PRIVATE_KEY     update-signing key from `npx tauri signer generate`
+#   TAURI_SIGNING_PRIVATE_KEY_PASSWORD
+# Repository variable:
+#   VPET_UPDATE_PUBKEY            the matching public key, built into the app
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CMAKE: cmake
+  # GPU build needs these (see scripts/gpu.ps1 and the ci.yml gpu job).
+  CARGO_TARGET_DIR: C:\vt
+  CMAKE_GENERATOR: Ninja
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      # Secrets can't be tested in `if:` directly.
+      HAS_CERT: ${{ secrets.WINDOWS_CERTIFICATE != '' }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+      - uses: ilammy/msvc-dev-cmd@v1.13.0
+      - uses: seanmiddleditch/gha-setup-ninja@v6
+      - uses: jakoch/install-vulkan-sdk-action@v1.6.0
+        with:
+          cache: true
+          install_runtime: true
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+
+      - name: Check the tag matches the app version
+        shell: pwsh
+        run: |
+          $conf = (Get-Content src-tauri/tauri.conf.json -Raw | ConvertFrom-Json).version
+          $tag = "${{ github.ref_name }}".TrimStart("v")
+          if ($conf -ne $tag) { throw "Tag v$tag doesn't match tauri.conf.json version $conf" }
+          "VERSION=$conf" >> $env:GITHUB_ENV
+
+      # The version's CHANGELOG.md section becomes the release notes, on
+      # GitHub and in the app's update screen. No section, no release.
+      - name: Read the release notes
+        shell: pwsh
+        run: |
+          $lines = Get-Content CHANGELOG.md
+          $start = ($lines | Select-String -Pattern "^## \[$([regex]::Escape($env:VERSION))\]" | Select-Object -First 1).LineNumber
+          if (-not $start) { throw "CHANGELOG.md has no '## [$env:VERSION]' section" }
+          $notes = @()
+          foreach ($line in $lines[$start..($lines.Count - 1)]) { if ($line -match '^## ') { break }; $notes += $line }
+          ($notes -join "`n").Trim() | Set-Content -Encoding utf8 "$env:RUNNER_TEMP/notes.md"
+
+      - name: Import the code-signing certificate
+        if: env.HAS_CERT == 'true'
+        shell: pwsh
+        env:
+          WINDOWS_CERTIFICATE: ${{ secrets.WINDOWS_CERTIFICATE }}
+          WINDOWS_CERTIFICATE_PASSWORD: ${{ secrets.WINDOWS_CERTIFICATE_PASSWORD }}
+        run: |
+          $pfx = Join-Path $env:RUNNER_TEMP "cert.pfx"
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($env:WINDOWS_CERTIFICATE))
+          $password = ConvertTo-SecureString $env:WINDOWS_CERTIFICATE_PASSWORD -AsPlainText -Force
+          $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          Remove-Item $pfx
+          "CERT_THUMBPRINT=$($cert.Thumbprint)" >> $env:GITHUB_ENV
+
+      # The GPU build imports vulkan-1.dll; shipping the loader next to the
+      # exe lets VPet start on PCs without it (it then runs on the CPU).
+      - name: Stage the Vulkan loader
+        shell: pwsh
+        run: |
+          $dll = @("$env:VULKAN_SDK\Bin\vulkan-1.dll", "$env:SystemRoot\System32\vulkan-1.dll") | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $dll) { throw "vulkan-1.dll not found" }
+          New-Item -ItemType Directory -Force src-tauri/gpu | Out-Null
+          Copy-Item $dll src-tauri/gpu/vulkan-1.dll
+
+      - name: Build the installer
+        shell: pwsh
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+          VPET_UPDATE_PUBKEY: ${{ vars.VPET_UPDATE_PUBKEY }}
+        run: |
+          $bundle = @{ resources = @{ "gpu/vulkan-1.dll" = "vulkan-1.dll" } }
+          if ($env:TAURI_SIGNING_PRIVATE_KEY) { $bundle.createUpdaterArtifacts = $true }
+          if ($env:CERT_THUMBPRINT) {
+            $bundle.windows = @{ certificateThumbprint = $env:CERT_THUMBPRINT; digestAlgorithm = "sha256"; timestampUrl = "http://timestamp.digicert.com" }
+          }
+          @{ bundle = $bundle } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 src-tauri/tauri.release.json
+          npx tauri build --features gpu --config src-tauri/tauri.release.json
+
+      - name: Write latest.json for the updater
+        shell: pwsh
+        run: |
+          $dir = "$env:CARGO_TARGET_DIR/release/bundle/nsis"
+          $exe = Get-ChildItem "$dir/*-setup.exe" | Select-Object -First 1
+          $sig = "$($exe.FullName).sig"
+          if (-not (Test-Path $sig)) { "No update signature (TAURI_SIGNING_PRIVATE_KEY not set): skipping latest.json"; exit 0 }
+          $url = "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/$($exe.Name)"
+          @{
+            version  = $env:VERSION
+            notes    = (Get-Content "$env:RUNNER_TEMP/notes.md" -Raw).Trim()
+            pub_date = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+            platforms = @{ "windows-x86_64" = @{ signature = (Get-Content $sig -Raw).Trim(); url = $url } }
+          } | ConvertTo-Json -Depth 5 | Set-Content -Encoding utf8 "$dir/latest.json"
+
+      - name: Publish the release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $files = Get-ChildItem "$env:CARGO_TARGET_DIR/release/bundle/nsis" -File | Where-Object { $_.Name -match '(-setup\.exe|-setup\.exe\.sig|latest\.json)$' }
+          gh release create "${{ github.ref_name }}" --title "VPet ${{ github.ref_name }}" --notes-file "$env:RUNNER_TEMP/notes.md" $files.FullName

@@ -1,17 +1,33 @@
 // Hand-drawn pixel templates: the format every animal is drawn in, and how a
-// template is decoded for the renderer. One character per art pixel:
+// template is decoded for the renderer. The style is a colour V-pet's:
+// chunky shapes seen three-quarters on (facing right), a dark outline, flat
+// colours with one shadow and one highlight. One character per art pixel:
 //
 //   .  transparent            1 2 3 4  body: deep shadow, shadow, base, light
 //   c C  cream: base, shadow  a A b    accent: base, shadow, light
 //   p  pupil (dark)           e        iris            w  white
-//   n  dark line / nose       m        mouth
-//   y Y  beak / bird feet     h H      bone: claws, horn
-//   r R g  robot: steel, dark steel, LED
+//   n  dark line / nose       M        the mouth (a dark line the face opens)
+//   m  mouth inside           y Y      beak / bird feet
+//   h H  bone: claws, horn    r R g    robot: steel, dark steel, LED
+//   W    white (not an eye)   o O      gold, dark gold
+//   k K  cloth, dark cloth    x X      energy, bright energy
+//   d    dark (void, ink)     l        leaf        f F  petal, flower heart
 //
-// Outlines are not drawn: the renderer outlines every edge in the darkest
-// tone of the colour it borders.
+// Outlines are not drawn, and neither is most shading: the renderer shades
+// each flat colour (shadow below and behind, light on top) and outlines every
+// edge. Internal lines (`n`) separate an arm or a leg from the body.
 
 import {
+  CLOTH,
+  CLOTH_D,
+  ENERGY,
+  ENERGY_L,
+  FLOWER,
+  FLOWER_C,
+  GEAR_D,
+  GOLD,
+  GOLD_D,
+  LEAF,
   ACC,
   ACC_D,
   ACC_L,
@@ -36,26 +52,44 @@ import {
   WHITE,
 } from "./palette";
 
-/** The art grid is 32x32, shown with each art pixel as a 2x2 block. */
-export const A = 32;
-export const ACX = 16;
+/** The art grid is 48x48, shown with each art pixel as a 2x2 block. */
+export const A = 48;
+export const ACX = 24;
 /** Art row the feet stand on. */
-export const AGROUND = 30;
+export const AGROUND = 45;
 
 /** One life stage of an animal. */
 export interface Form {
-  /** Front view: the left half of each row, including the middle column; mirrored to draw. */
-  front: string[];
-  /** Side view facing right: the first frame of its movement cycle. */
-  side: string[];
-  /** The rest of the cycle: each frame lists only the rows that differ from the first. */
-  sideFrames: Record<number, string>[];
+  /** Three-quarters view facing right, whole rows. Flipped to face left. */
+  rows: string[];
+  /**
+   * The other frames of its step (or wingbeat): each lists only the rows
+   * that differ from `rows`. The first is also its breath when idle.
+   */
+  frames: Record<number, string>[];
+  /** Where evolved parts attach (grown forms only). */
+  rig?: Rig;
 }
 
+/** Attachment points on a template, in template pixels. */
+export interface Rig {
+  /** The front hand or paw: weapons are held here. */
+  hand: [number, number];
+  /** The middle of the back: wings and the jetpack. */
+  back: [number, number];
+  /** The front arm (or foreleg) and the front leg, which can become robot parts. */
+  arm: Box;
+  leg: Box;
+}
+
+/**
+ * An egg animal's grown templates, Young and adult, in whole rows. The animal
+ * itself is painted art now (painted.ts); these are kept for the heads the
+ * evolved bodies wear (heads.ts).
+ */
 export interface Animal {
-  baby: Form;
-  young: Form;
-  adult: Form;
+  young: string[];
+  adult: string[];
 }
 
 const CHARS: Record<string, number> = {
@@ -73,6 +107,7 @@ const CHARS: Record<string, number> = {
   e: IRIS,
   w: WHITE,
   n: OUT,
+  M: OUT,
   m: MOUTH,
   y: BEAK,
   Y: BEAK_S,
@@ -81,6 +116,17 @@ const CHARS: Record<string, number> = {
   r: METAL,
   R: METAL_D,
   g: LED,
+  W: WHITE,
+  o: GOLD,
+  O: GOLD_D,
+  k: CLOTH,
+  K: CLOTH_D,
+  x: ENERGY,
+  X: ENERGY_L,
+  d: GEAR_D,
+  l: LEAF,
+  f: FLOWER,
+  F: FLOWER_C,
 };
 
 /** A rectangle of art pixels, inclusive. */
@@ -98,18 +144,36 @@ export interface Decoded {
   px: Uint8Array;
   /** Each eye's bounding box, left to right. */
   eyes: Box[];
-  /** The mouth: the lowest dark-line pixel nearest the middle, if any. */
+  /** The mouth: the middle of its `M` pixels, if any. */
   mouth: [number, number] | null;
 }
 
-/** Mirrors left-half rows into full rows (the last column is the middle). */
-export function mirror(half: string[]): string[] {
-  return half.map((r) => r + [...r.slice(0, -1)].reverse().join(""));
+/**
+ * Template rows from a block of text, one line per row. Leading spaces
+ * (the source indentation) are ignored and short rows are padded with `.`,
+ * so only the drawing needs typing.
+ */
+export function px(text: string): string[] {
+  const lines = text.split("\n").map((l) => l.trim()).filter((l) => l.length);
+  const w = Math.max(...lines.map((l) => l.length));
+  return lines.map((l) => l.padEnd(w, "."));
+}
+
+/** A frame that replaces the rows from `at` on with the rows of `text`. */
+export function from(at: number, text: string): Record<number, string> {
+  const out: Record<number, string> = {};
+  px(text).forEach((r, i) => (out[at + i] = r));
+  return out;
+}
+
+/** A template's frame `i` (0 is the base rows). */
+export function frameRows(f: Form, i: number): string[] {
+  return i > 0 && f.frames.length ? patch(f.rows, f.frames[(i - 1) % f.frames.length]) : f.rows;
 }
 
 /** Applies a frame's changed rows over the base rows. */
-export function patch(rows: string[], changes: Record<number, string>): string[] {
-  return rows.map((r, i) => changes[i] ?? r);
+function patch(rows: string[], changes: Record<number, string>): string[] {
+  return rows.map((r, i) => (changes[i] ?? r).padEnd(r.length, ".").slice(0, r.length));
 }
 
 const cache = new Map<string, Decoded>();
@@ -118,11 +182,11 @@ export function decode(rows: string[]): Decoded {
   const key = rows.join("\n");
   const hit = cache.get(key);
   if (hit) return hit;
-  const w = rows[0].length;
+  const w = Math.max(...rows.map((r) => r.length));
   const h = rows.length;
+  rows = rows.map((r) => r.padEnd(w, "."));
   const px = new Uint8Array(w * h);
   rows.forEach((r, y) => {
-    if (r.length !== w) throw new Error(`template row ${y} is ${r.length} wide, expected ${w}: "${r}"`);
     for (let x = 0; x < w; x++) {
       const c = CHARS[r[x]];
       if (c === undefined) throw new Error(`unknown template character "${r[x]}" in row ${y}`);
@@ -162,13 +226,10 @@ export function decode(rows: string[]): Decoded {
   }
   eyes.sort((a, b) => a.x0 - b.x0);
 
-  // Mouth: the lowest row of dark lines, the pixel nearest the middle.
-  let mouth: [number, number] | null = null;
-  for (let y = h - 1; y >= 0 && !mouth; y--) {
-    let best = -1;
-    for (let x = 0; x < w; x++) if (rows[y][x] === "n" && (best < 0 || Math.abs(x - w / 2) < Math.abs(best - w / 2))) best = x;
-    if (best >= 0) mouth = [best, y];
-  }
+  // Mouth: the middle of the marked mouth line.
+  const ms: [number, number][] = [];
+  rows.forEach((r, y) => [...r].forEach((ch, x) => ch === "M" && ms.push([x, y])));
+  const mouth = ms.length ? ms[ms.length >> 1] : null;
 
   const d = { w, h, px, eyes, mouth };
   cache.set(key, d);

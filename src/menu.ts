@@ -69,5 +69,8 @@ window.addEventListener("keydown", (e) => {
 window.addEventListener("blur", () => void invoke("hide_menu"));
 window.addEventListener("contextmenu", (e) => e.preventDefault());
 
-void listen<MenuState>("menu-open", (e) => render(e.payload));
+void listen<MenuState>("menu-open", (e) => {
+  sfx.open();
+  render(e.payload);
+});
 render({ egg: false, unchosen: false, name: null });

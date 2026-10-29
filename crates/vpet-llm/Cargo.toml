@@ -4,6 +4,11 @@ version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
+[features]
+# GPU acceleration through Vulkan (any vendor). Needs the Vulkan SDK to
+# build; at runtime the model falls back to the CPU if the GPU fails.
+vulkan = ["llama-cpp-2/vulkan"]
+
 [dependencies]
-llama-cpp-2 = "0.1.156"
+llama-cpp-2 = "0.1.160"
 encoding_rs = "0.8"

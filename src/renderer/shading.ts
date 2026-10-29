@@ -1,41 +1,75 @@
-// Finishing passes for sprites on the art grid: fur-like speckle between
-// shading tones, and outlines in each colour's own darkest tone.
+// Finishing passes for sprites on the art grid, in a colour V-pet's style:
+// flat cel shading (one shadow tone below and behind each shape, one light
+// tone along its top) and a dark outline around the whole silhouette.
 
 import { Grid } from "./pixel";
-import { BODY, DEEP, LIGHT, outlineOf, SHADE, SHADOW } from "./palette";
+import {
+  ACC,
+  ACC_D,
+  ACC_L,
+  BELLY,
+  BELLY_S,
+  BODY,
+  CLOTH,
+  CLOTH_D,
+  DEEP,
+  GOLD,
+  GOLD_D,
+  EYE,
+  IRIS,
+  LED,
+  LIGHT,
+  METAL,
+  METAL_D,
+  MOUTH,
+  outlineOf,
+  SHADE,
+  SHADOW,
+  WHITE,
+} from "./palette";
 
-/** A fixed noise value in 0..1 for each pixel. */
-function hash(x: number, y: number): number {
-  let h = Math.imul(x, 374761393) + Math.imul(y, 668265263);
-  h = Math.imul(h ^ (h >>> 13), 1274126177);
-  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
-}
+/** Each flat colour's family, and its shadow and light tones. */
+const FAMILIES: [number[], number, number, number][] = [
+  // [members, base, shadow, light]
+  [[DEEP, SHADE, BODY, LIGHT], BODY, SHADE, LIGHT],
+  [[BELLY, BELLY_S], BELLY, BELLY_S, BELLY],
+  [[ACC_D, ACC, ACC_L], ACC, ACC_D, ACC_L],
+  [[METAL, METAL_D, LED], METAL, METAL_D, WHITE],
+  [[CLOTH, CLOTH_D], CLOTH, CLOTH_D, CLOTH],
+  [[GOLD, GOLD_D], GOLD, GOLD_D, GOLD],
+];
+
+/** The face doesn't cast shading on the skin around it. */
+const FACE = new Set([EYE, IRIS, WHITE, MOUTH]);
 
 /**
- * Breaks up the edges between shading tones with speckle, like hand-placed
- * fur texture. Anchored at (ax, ay) on the sprite so it moves with it.
+ * Shades every flat base colour: a shadow along the bottom (two pixels deep)
+ * and the right-hand edge, a light along the top. Tones already placed by
+ * hand are kept. Internal lines count as edges, so a leg drawn over the
+ * body gets its own shadow.
  */
-export function texture(a: Grid, ax: number, ay: number): void {
+export function cel(a: Grid): void {
   const n = a.size;
   const src = a.data.slice();
   const at = (x: number, y: number) => (x < 0 || y < 0 || x >= n || y >= n ? 0 : src[y * n + x]);
-  for (let y = 0; y < n; y++) {
-    for (let x = 0; x < n; x++) {
-      const c = src[y * n + x];
-      if (c !== BODY && c !== SHADE && c !== LIGHT) continue;
-      const r = hash(x - ax, y - ay);
-      const nb = [at(x - 1, y), at(x + 1, y), at(x, y - 1), at(x, y + 1)];
-      let to = c;
-      if (c === BODY && nb.includes(SHADE) && r < 0.35) to = SHADE;
-      else if (c === BODY && nb.includes(LIGHT) && r > 0.65) to = LIGHT;
-      else if (c === SHADE && nb.includes(DEEP) && r < 0.3) to = DEEP;
-      else if (c === BODY && r < 0.04) to = SHADE;
-      a.data[y * n + x] = to;
+  for (const [members, base, shadow, light] of FAMILIES) {
+    const inside = (x: number, y: number) => {
+      const c = at(x, y);
+      return members.includes(c) || FACE.has(c);
+    };
+    for (let y = 0; y < n; y++) {
+      for (let x = 0; x < n; x++) {
+        if (src[y * n + x] !== base) continue;
+        let to = base;
+        if (!inside(x, y + 1) || !inside(x + 1, y) || (base !== METAL && !inside(x, y + 2))) to = shadow;
+        else if (!inside(x, y - 1) && inside(x - 1, y) && inside(x + 1, y)) to = light;
+        a.data[y * n + x] = to;
+      }
     }
   }
 }
 
-/** Outlines the silhouette, each edge pixel in the darkest tone of the colour it borders. */
+/** Outlines the silhouette, each edge pixel in the dark ink of the colour it borders. */
 export function selOut(a: Grid): void {
   const n = a.size;
   const src = a.data.slice();

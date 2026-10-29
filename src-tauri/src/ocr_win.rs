@@ -18,7 +18,7 @@ pub fn recognize(rgba: &[u8], width: u32, height: u32) -> Result<String, String>
     let _ = unsafe { RoInitialize(RO_INIT_MULTITHREADED) };
     let err = |e: windows::core::Error| e.message().to_string();
     let mut bgra = rgba.to_vec();
-    for px in bgra.chunks_exact_mut(4) {
+    for px in bgra.as_chunks_mut::<4>().0 {
         px.swap(0, 2);
     }
     let writer = DataWriter::new().map_err(err)?;
@@ -73,11 +73,16 @@ mod tests {
             DeleteDC(dc);
         }
         // GDI gives BGRA; recognize() wants RGBA.
-        for px in pixels.chunks_exact_mut(4) {
+        for px in pixels.as_chunks_mut::<4>().0 {
             px.swap(0, 2);
             px[3] = 255;
         }
-        let read = recognize(&pixels, w as u32, h as u32).unwrap().to_lowercase();
+        let read = match recognize(&pixels, w as u32, h as u32) {
+            Ok(text) => text.to_lowercase(),
+            // CI machines may have no OCR language pack installed.
+            Err(e) if e.contains("no OCR language") => return eprintln!("skipped: {e}"),
+            Err(e) => panic!("{e}"),
+        };
         assert!(read.contains("pizza"), "read: {read:?}");
     }
 }

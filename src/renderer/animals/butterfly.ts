@@ -1,179 +1,70 @@
-// Butterfly (Light egg): a slender pale-gold flier with patterned wings and
-// long antennae. Seen from the side its wings sweep through four frames:
-// open, rising, raised together, falling.
+// Butterfly (Light egg): a sunny, fuzzy butterfly with curled antennae, a
+// cream face and big spotted wings, and the chrysalis the caterpillar becomes
+// on its way to Young (`PUPA`, shown by the pupa animation in evolve.ts).
 
-import type { Animal } from "../art";
+import { px, type Animal } from "../art";
+
+/** The chrysalis, hanging from a twig: shown while it turns into a butterfly. */
+export const PUPA = px(`
+  HHHHHHHHHHHH
+  .....HH
+  ....3333
+  ...333333
+  ..33a33a33
+  ..33333333
+  .3333oo3333
+  .333333333c
+  .33a3333a3c
+  .333333333c
+  ..3333333cc
+  ..33a33a3c
+  ...333333c
+  ...33333cc
+  ....3333c
+  ....333c
+  .....33c
+  ......3
+`);
 
 export const butterfly: Animal = {
-  baby: {
-    front: [
-      "..2...",
-      "...2..",
-      "...33.",
-      "aa333.",
-      "aba333",
-      "aa3pp3",
-      ".a3ee3",
-      "aa3333",
-      "aba333",
-      ".aa33.",
-      "...33.",
-      "...cc.",
-    ],
-    side: [
-      "...2.....",
-      "....2....",
-      ".aaa..33.",
-      "abba.3333",
-      ".aab.33pp",
-      "..aa33ee3",
-      ".aaa3333n",
-      "abba.333.",
-      ".aa..333.",
-      ".....cc..",
-    ],
-    sideFrames: [
-      { 2: ".aa...33.", 3: "abba.3333", 4: "aaba.33pp", 5: "..aa33ee3", 6: "..aa3333n", 7: ".aba.333." },
-      { 2: "aaa...33.", 3: "abba.3333", 4: "abba.33pp", 5: ".aaa33ee3", 6: "..aa3333n", 7: "..aa.333." },
-      { 2: "..aa..33.", 3: ".aba.3333", 4: "abba.33pp", 5: "aaaa33ee3", 6: ".aaa3333n", 7: "abba.333." },
-    ],
-  },
-  young: {
-    front: [
-      "..2.....",
-      "...2....",
-      "....2...",
-      "....333.",
-      "aa..333.",
-      "aba3333.",
-      "abba3pp3",
-      "aab33ee3",
-      "aaa33333",
-      "aba33333",
-      "abba333.",
-      ".aab333.",
-      "..aa333.",
-      "....cc3.",
-    ],
-    side: [
-      "....2........",
-      ".....2.......",
-      "..aaa.....33.",
-      ".abbba..3333.",
-      ".aabba..33pp3",
-      "..aaab.333ee3",
-      "...aaa33333n.",
-      "..aaab.3333..",
-      ".abbba.3333..",
-      ".aabb..333...",
-      "..aa...333...",
-      ".......cc....",
-    ],
-    sideFrames: [
-      {
-        2: "..aa......33.",
-        3: ".abbba..3333.",
-        4: ".aabbb..33pp3",
-        5: "..aaab.333ee3",
-        6: "...aaa33333n.",
-        7: "..aabb.3333..",
-        8: ".abbba.3333..",
-      },
-      {
-        2: ".aaa......33.",
-        3: "abbba...3333.",
-        4: "aabba...33pp3",
-        5: ".aaaa..333ee3",
-        6: "..aaa333333n.",
-        7: "...aab.3333..",
-        8: "..abba.3333..",
-      },
-      {
-        2: "...aa.....33.",
-        3: "..abba..3333.",
-        4: ".aabba..33pp3",
-        5: "aaaaab.333ee3",
-        6: "..aaaa33333n.",
-        7: ".aabbb.3333..",
-        8: "abbbba.3333..",
-      },
-    ],
-  },
-  adult: {
-    front: [
-      "..2......",
-      "...2.....",
-      "....2....",
-      ".....333.",
-      "aaa..333.",
-      "abba3333.",
-      "abbba333.",
-      "aabba3pp3",
-      "aaabb3ee3",
-      "aaaab3333",
-      "abbba3333",
-      "abbbb3333",
-      "aabba333.",
-      ".aabb333.",
-      "..aab333.",
-      "...aa333.",
-      "....a33..",
-      "....cc3..",
-      ".....c...",
-    ],
-    side: [
-      ".....2...........",
-      "......2..........",
-      "..aaaa.......33..",
-      ".abbbba....33333.",
-      ".abbbba....333pp3",
-      "..aabba....333ee3",
-      "...aaaa..33333cn.",
-      "....aaa33333333..",
-      "...aaaa..3333333.",
-      "..aabba....33333.",
-      ".abbbba....3333..",
-      ".abbbba....333...",
-      "..aabb.....333...",
-      "...aa......333...",
-      "...........c33...",
-      "...........cc....",
-      "...........c.....",
-    ],
-    sideFrames: [
-      {
-        2: "..aaa........33..",
-        3: ".abbbba....33333.",
-        4: ".abbbba....333pp3",
-        5: "..aabbb....333ee3",
-        6: "...aaaa..33333cn.",
-        7: "....aaa33333333..",
-        8: "...aaab..3333333.",
-        9: "..aabbb....33333.",
-        10: ".abbbba....3333..",
-      },
-      {
-        2: ".aaaa........33..",
-        3: "abbbba.....33333.",
-        4: "abbbba.....333pp3",
-        5: ".aabba.....333ee3",
-        6: "..aaaa...33333cn.",
-        7: "...aaa333333333..",
-        8: "..aaaa...3333333.",
-        9: ".aabba.....33333.",
-        10: "abbbba.....3333..",
-      },
-      {
-        2: "...aaa.......33..",
-        3: "..abbbba...33333.",
-        4: "..abbbba...333pp3",
-        5: "...aabba...333ee3",
-        6: "....aaaa.33333cn.",
-        7: ".....aaa3333333..",
-        8: "....aaaa.3333333.",
-        9: "...aabba...33333.",
-        10: "..abbbba...3333..",
-      },
-    ],
-  },
+  young: px(`
+    ......33.......33
+    ........3.....3
+    .........3...3
+    .aaaa...3333333...aaaa
+    aabbaa.333333333.aabbaa
+    abbbba33wp333wp33abbbba
+    abbbba33pp333pp33abbbba
+    aabbaa33pe333pe33aabbaa
+    .aaaaa333333M33333aaaaa
+    ..aaaa.333333333.aaaa
+    ..aaaaa.3ccccc3.aaaaa
+    ..abba..3ccccc3..abba
+    ..aaa...3ccccc3...aaa
+    ........33333333
+    .........3....3
+  `),
+  adult: px(`
+    ........33............33
+    ..........3..........3
+    ...........3........3
+    .aaaaaa.....3......3.....aaaaaa
+    aabbbbaa.....3333333....aabbbbaa
+    abbbbbbaa...333333333..aabbbbbba
+    abbccbbbaa.33333333333.aabbbccbba
+    abbccbbbaa3333wp333wp3333aabbbccbba
+    abbbbbbbaa3333pp333pp3333aabbbbbbba
+    aabbbbbaaa3333pe333pe3333aaabbbbbaa
+    .aaaaaaaaa3333pe333pe3333aaaaaaaaa
+    ..aaaaaaaa33333MMM333333aaaaaaaa
+    ...aaaaaaaa33333333333aaaaaaaa
+    ....aaaaaaa.333333333.aaaaaaa
+    ....aaaaaa..3ccccccc3..aaaaaa
+    ....aabbbaa.3ccccccc3.aabbbaa
+    ....abbbbba.3ccccccc3.abbbbba
+    ....aabbbaa.3ccccccc3.aabbbaa
+    .....aaaaa..33ccccc33..aaaaa
+    .............3333333
+    ............33.....33
+  `),
 };

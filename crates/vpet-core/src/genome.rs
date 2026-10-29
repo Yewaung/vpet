@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::rng::Rng;
+use crate::style::Style;
 
 /// The six eggs a user can choose from, named for an element. Each hides a
 /// different animal, which the egg also decides along with how it moves;
@@ -169,6 +170,9 @@ pub struct Genome {
     pub egg: Option<EggKind>,
     #[serde(default)]
     pub parts: Parts,
+    /// The evolved form's look (body, element, gear, flight); default until Rookie.
+    #[serde(default)]
+    pub style: Style,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -306,6 +310,7 @@ impl Genome {
             voice: Voice { pitch: 0.8 },
             egg: None,
             parts: Parts::default(),
+            style: Style::default(),
         }
     }
 
@@ -451,8 +456,21 @@ impl Genome {
         }
     }
 
+    /// How it gets around: its egg's way, until wings, a jetpack or a spirit body let it fly.
     pub fn locomotion(&self) -> Locomotion {
+        if self.style.flies() {
+            return Locomotion::Fly;
+        }
         self.egg.map_or(Locomotion::Walk, EggKind::locomotion)
+    }
+
+    /// How it gets around at stage: a butterfly starts life as a
+    /// caterpillar that crawls, and only flies from Young on.
+    pub fn locomotion_at(&self, stage: crate::lifecycle::LifeStage) -> Locomotion {
+        if self.egg == Some(EggKind::Light) && stage <= crate::lifecycle::LifeStage::Baby {
+            return Locomotion::Crawl;
+        }
+        self.locomotion()
     }
 
     /// Every gene with its dotted name, for validation, diffing and storage.

@@ -47,6 +47,9 @@ pub enum PetEvent {
         /// The name its mind gave the new form, if it designed it.
         #[serde(default)]
         form_name: Option<String>,
+        /// Why it changed, from its real personality, care and your habits.
+        #[serde(default)]
+        reasons: Vec<String>,
     },
     /// The pet asked the user something (shown in its bubble and the chat).
     AskedQuestion { text: String },
@@ -66,6 +69,14 @@ pub enum PetEvent {
     PlanMade { mood: crate::mind::Mood, goal: GoalKind },
     /// Ready to evolve; its mind is designing the new form.
     EvolutionStarted { to: LifeStage },
+    /// The user came back to the PC after being away.
+    UserReturned { minutes: u32 },
+    /// The user was at the PC but didn't spend time with the pet.
+    Ignored { minutes: u32 },
+    /// The user started playing a game.
+    GameStarted,
+    /// Its mind felt something about what happened.
+    Felt { emotion: crate::emotion::Emotion, intensity: f64, cause: String },
 }
 
 impl PetEvent {
@@ -91,9 +102,7 @@ impl PetEvent {
             PetEvent::SleepFinished { interrupted: false } => "Slept well.".into(),
             PetEvent::ExplorationFinished => "Done exploring.".into(),
             PetEvent::NeedCritical { need } => format!("My {need:?} is very low.").to_lowercase(),
-            PetEvent::ActivityObserved { category, minutes } => {
-                format!("You were {} for {minutes} min.", category.activity_phrase())
-            }
+            PetEvent::ActivityObserved { category, minutes } => format!("You were {} for {minutes} min.", category.activity_phrase()),
             PetEvent::InterestFormed { category, level } => {
                 format!("I think you like {} ({}).", category.activity_phrase(), level.key())
             }
@@ -120,6 +129,13 @@ impl PetEvent {
             PetEvent::BeliefFormed { text } => format!("I think: {text}"),
             PetEvent::PlanMade { mood, goal } => format!("Today I feel {} and I want to {}.", mood.key(), goal.phrase()),
             PetEvent::EvolutionStarted { .. } => "Something is changing inside me...".into(),
+            PetEvent::UserReturned { minutes } => format!("You came back after {minutes} minutes away."),
+            PetEvent::Ignored { minutes } => format!("You were here for {minutes} minutes but didn't spend time with me."),
+            PetEvent::GameStarted => "You started playing a game.".into(),
+            PetEvent::Felt { emotion, intensity, cause } => {
+                let how = if *intensity >= 0.9 { "very " } else if *intensity < 0.5 { "a little " } else { "" };
+                format!("I feel {how}{} ({})", emotion.key(), cause.trim_end_matches('.').to_lowercase())
+            }
             PetEvent::AskedQuestion { text } => format!("I asked you: \"{text}\""),
             PetEvent::GotAnswer { summary } => summary.clone(),
             PetEvent::LearnedUserName { name } => format!("Your name is {name}!"),
@@ -168,6 +184,48 @@ impl PetEvent {
             PetEvent::BeliefFormed { .. } => "belief_formed",
             PetEvent::PlanMade { .. } => "plan_made",
             PetEvent::EvolutionStarted { .. } => "evolution_started",
+            PetEvent::UserReturned { .. } => "user_returned",
+            PetEvent::Ignored { .. } => "ignored",
+            PetEvent::GameStarted => "game_started",
+            PetEvent::Felt { .. } => "felt",
+        }
+    }
+
+    /// What it has to feel about, if this is a meaningful moment: being
+    /// fed, petted, ignored or woken, you coming back, a need running low,
+    /// a game starting, something learned or achieved. Its own thoughts and
+    /// routine bookkeeping aren't.
+    pub fn felt(&self) -> Option<String> {
+        match self {
+            PetEvent::Petted
+            | PetEvent::PettedTooMuch
+            | PetEvent::FoodGiven { .. }
+            | PetEvent::PlayOffered { .. }
+            | PetEvent::PickedUp
+            | PetEvent::Dropped
+            | PetEvent::Hatched
+            | PetEvent::SleepFinished { interrupted: true }
+            | PetEvent::ExplorationFinished
+            | PetEvent::NeedCritical { .. }
+            | PetEvent::CareCall { .. }
+            | PetEvent::CareMistake { .. }
+            | PetEvent::Talked
+            | PetEvent::Named { .. }
+            | PetEvent::GotAnswer { .. }
+            | PetEvent::LearnedUserName { .. }
+            | PetEvent::WordLearned { .. }
+            | PetEvent::GoalCompleted { .. }
+            | PetEvent::GoalAbandoned { .. }
+            | PetEvent::MediaMoment { .. }
+            | PetEvent::WatchedTogether { .. }
+            | PetEvent::Evolved { .. }
+            | PetEvent::EvolutionStarted { .. }
+            | PetEvent::LaidEgg
+            | PetEvent::UserReturned { .. }
+            | PetEvent::Ignored { .. }
+            | PetEvent::GameStarted => self.thought(),
+            PetEvent::AppStarted { offline_secs } if *offline_secs > 3600 => self.thought(),
+            _ => None,
         }
     }
 }

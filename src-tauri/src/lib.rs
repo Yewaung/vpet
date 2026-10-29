@@ -7,10 +7,15 @@
 mod activity_win;
 mod audio_win;
 mod brain;
+mod comfort;
 mod desktop;
+mod focus_win;
+mod hardware;
 mod netgate;
 mod ocr_win;
+mod power_win;
 mod runtime;
+mod updater;
 
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{Duration, Instant};
@@ -22,9 +27,12 @@ use serde::Serialize;
 use vpet_core::{ChatLine, Interaction, ReplyPlan};
 use vpet_llm::{GenOptions, Message, Role};
 
-use brain::{Brain, BrainStatus, ModelSize};
+use brain::{Brain, BrainStatus, BrainTuning, ModelSize};
+use comfort::Comfort;
 use desktop::Bounds;
-use runtime::{ActivityProbe, Frame, MindView, Probe, Runtime, StatusView};
+use hardware::{Profile, Tuning};
+use runtime::{ActivityProbe, Buttons, Frame, HardwareView, MindView, Probe, Runtime, StatusView};
+use updater::UpdateInfo;
 
 const PET: &str = "pet";
 const STATUS: &str = "status";
@@ -52,9 +60,20 @@ const SPEED_RUN_CONFIRMATION: &str = "RESET";
 
 type Shared = Arc<Mutex<Runtime>>;
 
+/// A newer release found by the last update check, if any.
+#[derive(Default)]
+struct Updates(Mutex<Option<UpdateInfo>>);
+
+/// Automatic update checks (when the user turned them on) run at most this often.
+const UPDATE_CHECK_EVERY_MS: i64 = 24 * 3600 * 1000;
+
 fn lock(shared: &Shared) -> MutexGuard<'_, Runtime> {
     // A panic elsewhere must not take the pet down with it.
     shared.lock().unwrap_or_else(|p| p.into_inner())
+}
+
+fn brain_tuning(t: &Tuning) -> BrainTuning {
+    BrainTuning { run: t.run, idle_unload: t.idle_unload }
 }
 
 fn work_area(win: &WebviewWindow) -> Option<Bounds> {
@@ -88,16 +107,44 @@ fn window_size(win: &WebviewWindow) -> (f64, f64) {
         .unwrap_or((200.0, 200.0))
 }
 
+/// A mouse button right now: (held down, pressed at some point since the last look).
+/// Read from Windows directly, so clicks on the pet count whichever window
+/// has focus and on every monitor.
 #[cfg(windows)]
-fn left_button_down() -> bool {
-    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LBUTTON};
+fn button(vk: u16) -> (bool, bool) {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetAsyncKeyState;
     // SAFETY: GetAsyncKeyState has no preconditions.
-    unsafe { (GetAsyncKeyState(VK_LBUTTON as i32) as u16 & 0x8000) != 0 }
+    let s = unsafe { GetAsyncKeyState(vk as i32) } as u16;
+    (s & 0x8000 != 0, s & 1 != 0)
+}
+
+#[cfg(windows)]
+fn buttons() -> Buttons {
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::{VK_CONTROL, VK_LBUTTON, VK_RBUTTON};
+    let (left, left_clicked) = button(VK_LBUTTON);
+    let (right, right_clicked) = button(VK_RBUTTON);
+    let (ctrl, _) = button(VK_CONTROL);
+    Buttons { left, left_clicked, right, right_clicked, ctrl }
 }
 
 #[cfg(not(windows))]
-fn left_button_down() -> bool {
-    true
+fn buttons() -> Buttons {
+    Buttons::default()
+}
+
+/// VPet can't start: says why in a plain Windows message box (a release
+/// build has no console to print to) and quits.
+fn cannot_start(why: &str) -> ! {
+    eprintln!("vpet: cannot start: {why}");
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::UI::WindowsAndMessaging::{MessageBoxW, MB_ICONERROR, MB_OK};
+        let wide = |s: &str| s.encode_utf16().chain([0]).collect::<Vec<u16>>();
+        let (text, title) = (wide(&format!("VPet can't start.\n\n{why}")), wide("VPet"));
+        // SAFETY: both strings are NUL-terminated and outlive the call.
+        unsafe { MessageBoxW(std::ptr::null_mut(), text.as_ptr(), title.as_ptr(), MB_OK | MB_ICONERROR) };
+    }
+    std::process::exit(1);
 }
 
 fn emit_frame(app: &AppHandle, frame: Option<Frame>) {
@@ -111,7 +158,9 @@ fn emit_frame(app: &AppHandle, frame: Option<Frame>) {
 /// checks and applies the answer. Without a model the pet's code-only mind
 /// takes over at once.
 fn think(app: &AppHandle, shared: &Shared, brain: &Brain) {
-    let Some(request) = lock(shared).take_thought() else { return };
+    let Some(request) = lock(shared).take_thought() else {
+        return;
+    };
     let (app, shared, brain) = (app.clone(), shared.clone(), brain.clone());
     std::thread::spawn(move || {
         let answer = if brain.status().available {
@@ -137,22 +186,31 @@ fn think(app: &AppHandle, shared: &Shared, brain: &Brain) {
 /// Drives the pet at a variable rate: ~60 Hz while moving, ~7 Hz when idle.
 fn spawn_loop(app: AppHandle, shared: Shared, win: WebviewWindow, brain: Brain) {
     std::thread::spawn(move || {
-        let mut cached = (win.scale_factor().unwrap_or(1.0), window_size(&win), work_area(&win));
+        let desktop = || (focus_win::user_busy(), focus_win::autohide_taskbar(), focus_win::other_app_in_focus(), activity_win::idle_secs(), power_win::on_battery());
+        let mut cached = (win.scale_factor().unwrap_or(1.0), window_size(&win), work_area(&win), desktop());
         let mut last_read = Instant::now();
         let mut last_activity = Instant::now();
-        loop {
-            // Monitor geometry changes rarely; re-read it once a second.
+        let mut last_mind_check = Instant::now();
+        // One pass of the loop; returns how long to wait before the next.
+        let mut iterate = || -> Duration {
+            // Monitor geometry, the "busy" state and which window has focus change rarely; re-read them once a second.
             if last_read.elapsed() >= Duration::from_secs(1) {
-                cached = (win.scale_factor().unwrap_or(cached.0), window_size(&win), work_area(&win));
+                cached = (win.scale_factor().unwrap_or(cached.0), window_size(&win), work_area(&win), desktop());
                 last_read = Instant::now();
+                brain.set_battery(cached.3 .4);
             }
             let mut probe = Probe {
                 cursor: app.cursor_position().ok().map(|p| (p.x, p.y)),
                 scale: cached.0,
                 size: cached.1,
                 bounds: cached.2,
-                left_button_down: left_button_down(),
+                buttons: buttons(),
                 activity: None,
+                busy: cached.3 .0,
+                taskbar: cached.3 .1,
+                working: cached.3 .2,
+                idle_secs: cached.3 .3,
+                on_battery: cached.3 .4,
             };
             // Foreground apps are only looked at while the user allows it.
             if last_activity.elapsed() >= ACTIVITY_SAMPLE_EVERY {
@@ -164,6 +222,12 @@ fn spawn_loop(app: AppHandle, shared: Shared, win: WebviewWindow, brain: Brain) 
                     });
                 }
             }
+            // Its mind may have been installed or removed.
+            if last_mind_check.elapsed() >= Duration::from_secs(2) {
+                last_mind_check = Instant::now();
+                let ready = brain.status().available;
+                lock(&shared).set_mind_ready(ready);
+            }
             let actions = lock(&shared).step(probe);
 
             if let Some((x, y)) = actions.position {
@@ -172,15 +236,34 @@ fn spawn_loop(app: AppHandle, shared: Shared, win: WebviewWindow, brain: Brain) 
             if let Some(ignore) = actions.ignore_cursor {
                 let _ = win.set_ignore_cursor_events(ignore);
             }
+            match actions.visible {
+                Some(true) => drop(win.show()),
+                Some(false) => drop(win.hide()),
+                None => {}
+            }
             emit_frame(&app, actions.frame);
+            if actions.open_menu {
+                open_menu(&app, &shared);
+            }
             think(&app, &shared, &brain);
             if actions.ask_consent {
                 open_status(&app, "consent");
             }
+            if actions.open_mind {
+                open_status(&app, "mind");
+            }
             if actions.choose_egg {
                 open_eggs(&app);
             }
-            std::thread::sleep(actions.sleep);
+            actions.sleep
+        };
+        loop {
+            // A fault in one pass must not freeze the pet for good: note it and carry on.
+            let pause = std::panic::catch_unwind(std::panic::AssertUnwindSafe(&mut iterate)).unwrap_or_else(|_| {
+                eprintln!("vpet: the pet's loop hit an error and carried on");
+                Duration::from_secs(1)
+            });
+            std::thread::sleep(pause);
         }
     });
 }
@@ -359,17 +442,28 @@ async fn drag_end(app: AppHandle, shared: tauri::State<'_, Shared>) -> Result<()
     Ok(())
 }
 
-/// Opens the pixel menu at the cursor, kept inside the pet's monitor.
 #[tauri::command]
 async fn show_menu(app: AppHandle, shared: tauri::State<'_, Shared>) -> Result<(), String> {
+    menu_at_cursor(&app, &shared)
+}
+
+/// A right-click on the pet (seen by the pet's loop): opens the menu.
+fn open_menu(app: &AppHandle, shared: &Shared) {
+    if let Err(e) = menu_at_cursor(app, shared) {
+        eprintln!("vpet: could not open the menu: {e}");
+    }
+}
+
+/// Opens the pixel menu at the cursor, kept inside the pet's monitor.
+fn menu_at_cursor(app: &AppHandle, shared: &Shared) -> Result<(), String> {
     let state = {
-        let rt = lock(&shared);
+        let rt = lock(shared);
         MenuState { egg: rt.is_egg(), unchosen: !rt.egg_chosen(), name: rt.name() }
     };
     let pet = app.get_webview_window(PET).ok_or("pet window missing")?;
     let menu = match app.get_webview_window(MENU) {
         Some(w) => w,
-        None => build_menu_window(&app).map_err(|e| e.to_string())?,
+        None => build_menu_window(app).map_err(|e| e.to_string())?,
     };
     let scale = pet.scale_factor().unwrap_or(1.0);
     let (w, h) = (MENU_SIZE.0 * scale, MENU_SIZE.1 * scale);
@@ -520,7 +614,9 @@ async fn stop_speed_run(app: AppHandle, shared: tauri::State<'_, Shared>) -> Res
 /// Resizes the pet window to `logical` size, keeping its feet in place.
 /// Called without the runtime lock held (window calls block on the main thread).
 fn resize_pet(app: &AppHandle, shared: &Shared, logical: (f64, f64)) {
-    let Some(win) = app.get_webview_window(PET) else { return };
+    let Some(win) = app.get_webview_window(PET) else {
+        return;
+    };
     let scale = win.scale_factor().unwrap_or(1.0);
     if win.set_size(LogicalSize::new(logical.0, logical.1)).is_err() {
         return;
@@ -556,6 +652,51 @@ fn model_url(size: ModelSize) -> &'static str {
     }
 }
 
+/// Why its mind couldn't be installed. The installer gets these as exit codes.
+#[derive(Debug)]
+enum FetchError {
+    Failed(String),
+    NoSpace { need_mb: u64 },
+    Corrupt,
+}
+
+impl FetchError {
+    fn code(&self) -> i32 {
+        match self {
+            FetchError::Failed(_) => 1,
+            FetchError::NoSpace { .. } => 3,
+            FetchError::Corrupt => 4,
+        }
+    }
+}
+
+impl std::fmt::Display for FetchError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            FetchError::Failed(e) => write!(f, "{e}"),
+            FetchError::NoSpace { need_mb } => write!(f, "not enough free disk space: it needs about {need_mb} MB"),
+            FetchError::Corrupt => write!(f, "the download was damaged (it doesn't match the published file); please try again"),
+        }
+    }
+}
+
+/// Downloads a language model through the network gate. There must be room
+/// for it first, and it only takes its place once it is checked to be
+/// exactly the published file, so a half-checked file never looks installed.
+fn fetch_model(size: ModelSize, dest: &std::path::Path, allowed: impl Fn() -> bool, progress: impl FnMut(u64, Option<u64>)) -> Result<(), FetchError> {
+    let need = size.bytes() + 200 * 1_048_576;
+    if dest.parent().and_then(hardware::free_bytes).is_some_and(|free| free < need) {
+        return Err(FetchError::NoSpace { need_mb: need / 1_048_576 });
+    }
+    let fetched = dest.with_extension("download");
+    netgate::download(model_url(size), &fetched, allowed, progress).map_err(FetchError::Failed)?;
+    if brain::verify(&fetched, size).is_err() {
+        let _ = std::fs::remove_file(&fetched);
+        return Err(FetchError::Corrupt);
+    }
+    std::fs::rename(&fetched, dest).map_err(|e| FetchError::Failed(e.to_string()))
+}
+
 /// Picks the light or full model for conversations (takes effect next talk).
 #[tauri::command]
 async fn choose_model(shared: tauri::State<'_, Shared>, brain: tauri::State<'_, Brain>, size: String) -> Result<(), String> {
@@ -564,8 +705,9 @@ async fn choose_model(shared: tauri::State<'_, Shared>, brain: tauri::State<'_, 
     lock(&shared).set_model_size(size.key())
 }
 
-/// Downloads a language model through the network gate. Only works while
-/// the user allows internet access; turning it off cancels the download.
+/// Downloads its mind (a language model). The pet can't live without one,
+/// so pressing Download is the user's permission for this one file, as
+/// installing is: it doesn't need the general Internet access switch.
 #[tauri::command]
 async fn download_model(app: AppHandle, shared: tauri::State<'_, Shared>, brain: tauri::State<'_, Brain>, size: String) -> Result<(), String> {
     let size = ModelSize::from_key(&size).ok_or_else(|| format!("unknown model size {size}"))?;
@@ -573,29 +715,166 @@ async fn download_model(app: AppHandle, shared: tauri::State<'_, Shared>, brain:
     if dest.exists() {
         return Ok(());
     }
-    let shared = shared.inner().clone();
+    let handle = app.clone();
     tauri::async_runtime::spawn_blocking(move || {
         let mut last_pct = u64::MAX;
-        netgate::download(
-            model_url(size),
-            &dest,
-            || lock(&shared).internet_enabled(),
-            |done, total| {
-                let pct = total.map(|t| done * 100 / t.max(1)).unwrap_or(0);
-                if pct != last_pct {
-                    last_pct = pct;
-                    let _ = app.emit_to(STATUS, "model-download", (done, total));
-                }
-            },
-        )
+        fetch_model(size, &dest, || true, |done, total| {
+            let pct = total.map(|t| done * 100 / t.max(1)).unwrap_or(0);
+            if pct != last_pct {
+                last_pct = pct;
+                let _ = handle.emit_to(STATUS, "model-download", (done, total));
+            }
+        })
     })
     .await
     .map_err(|e| e.to_string())?
+    .map_err(|e| e.to_string())?;
+    // Its mind is here: it wakes up.
+    brain.choose(size);
+    let mut rt = lock(&shared);
+    rt.set_model_size(size.key())?;
+    rt.set_mind_ready(true);
+    emit_frame(&app, Some(rt.current_frame()));
+    Ok(())
 }
 
 #[tauri::command]
 async fn get_brain_status(brain: tauri::State<'_, Brain>) -> Result<BrainStatus, String> {
     Ok(brain.status())
+}
+
+#[tauri::command]
+async fn get_hardware(shared: tauri::State<'_, Shared>) -> Result<HardwareView, String> {
+    Ok(lock(&shared).hardware_view())
+}
+
+/// "auto", "low", "balanced" or "performance". Also switches to the
+/// profile's model size (which the user can change again afterwards).
+#[tauri::command]
+async fn set_hardware_profile(shared: tauri::State<'_, Shared>, brain: tauri::State<'_, Brain>, profile: String) -> Result<(), String> {
+    let choice = match profile.as_str() {
+        "auto" => None,
+        key => Some(Profile::from_key(key).ok_or_else(|| format!("unknown profile {key}"))?),
+    };
+    let mut rt = lock(&shared);
+    let tuning = rt.set_profile_choice(choice)?;
+    brain.tune(brain_tuning(&tuning));
+    brain.choose(tuning.model);
+    rt.set_model_size(tuning.model.key())
+}
+
+#[tauri::command]
+async fn get_comfort(shared: tauri::State<'_, Shared>) -> Result<Comfort, String> {
+    Ok(lock(&shared).comfort())
+}
+
+#[tauri::command]
+async fn set_comfort(app: AppHandle, shared: tauri::State<'_, Shared>, comfort: Comfort) -> Result<(), String> {
+    let frame = lock(&shared).set_comfort(comfort)?;
+    if let Some(win) = app.get_webview_window(PET) {
+        let _ = win.set_always_on_top(comfort.on_top);
+    }
+    emit_frame(&app, Some(frame));
+    Ok(())
+}
+
+/// The pet window reports Windows' reduce-motion preference.
+#[tauri::command]
+async fn set_system_reduced_motion(shared: tauri::State<'_, Shared>, reduced: bool) -> Result<(), String> {
+    lock(&shared).set_system_reduced_motion(reduced);
+    Ok(())
+}
+
+#[derive(Serialize)]
+struct UpdateView {
+    current: &'static str,
+    /// This build knows the signing key, so it can install updates.
+    can_install: bool,
+    checks_enabled: bool,
+    last_checked_ms: Option<i64>,
+    available: Option<UpdateInfo>,
+}
+
+#[tauri::command]
+async fn get_updates(shared: tauri::State<'_, Shared>, updates: tauri::State<'_, Updates>) -> Result<UpdateView, String> {
+    let rt = lock(&shared);
+    Ok(UpdateView {
+        current: updater::current_version(),
+        can_install: updater::can_install(),
+        checks_enabled: rt.update_checks_enabled(),
+        last_checked_ms: rt.last_update_check_ms(),
+        available: updates.0.lock().unwrap_or_else(|p| p.into_inner()).clone(),
+    })
+}
+
+#[tauri::command]
+async fn set_update_checks(shared: tauri::State<'_, Shared>, enabled: bool) -> Result<(), String> {
+    lock(&shared).set_update_checks(enabled)
+}
+
+/// Looks for a newer release through the network gate.
+fn check_updates_now(app: &AppHandle) -> Result<Option<UpdateInfo>, String> {
+    let shared = app.state::<Shared>().inner().clone();
+    let found = updater::check(|| lock(&shared).internet_enabled());
+    lock(&shared).mark_update_checked(runtime::now_ms());
+    let found = found?;
+    *app.state::<Updates>().0.lock().unwrap_or_else(|p| p.into_inner()) = found.clone();
+    if found.is_some() {
+        let _ = app.emit_to(STATUS, "update-available", found.clone());
+    }
+    Ok(found)
+}
+
+#[tauri::command]
+async fn check_for_updates(app: AppHandle) -> Result<Option<UpdateInfo>, String> {
+    tauri::async_runtime::spawn_blocking(move || check_updates_now(&app)).await.map_err(|e| e.to_string())?
+}
+
+/// Downloads, verifies and starts the installer, then quits so it can
+/// replace the app. Needs internet access and a signed build.
+#[tauri::command]
+async fn install_update(app: AppHandle, shared: tauri::State<'_, Shared>, updates: tauri::State<'_, Updates>) -> Result<(), String> {
+    let info = updates.0.lock().unwrap_or_else(|p| p.into_inner()).clone().ok_or("No update was found yet.")?;
+    let shared = shared.inner().clone();
+    let dir = std::env::temp_dir();
+    let handle = app.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut last_pct = u64::MAX;
+        updater::install(
+            &info,
+            &dir,
+            || lock(&shared).internet_enabled(),
+            |done, total| {
+                let pct = total.map(|t| done * 100 / t.max(1)).unwrap_or(0);
+                if pct != last_pct {
+                    last_pct = pct;
+                    let _ = handle.emit_to(STATUS, "update-download", (done, total));
+                }
+            },
+            || lock(&shared).shutdown(),
+        )
+    })
+    .await
+    .map_err(|e| e.to_string())??;
+    app.exit(0);
+    Ok(())
+}
+
+/// With the user's permission (update checks on *and* internet access on),
+/// looks for an update at most once a day. Otherwise it only waits.
+fn spawn_update_checker(app: AppHandle, shared: Shared) {
+    std::thread::spawn(move || loop {
+        std::thread::sleep(Duration::from_secs(10 * 60));
+        let due = {
+            let rt = lock(&shared);
+            rt.update_checks_enabled() && rt.internet_enabled() && rt.last_update_check_ms().is_none_or(|t| runtime::now_ms() - t >= UPDATE_CHECK_EVERY_MS)
+        };
+        if due {
+            if let Err(e) = check_updates_now(&app) {
+                eprintln!("vpet: update check failed: {e}");
+            }
+        }
+    });
 }
 
 #[derive(Serialize)]
@@ -628,6 +907,9 @@ async fn send_message(
     if text.is_empty() {
         return Err("Say something first.".into());
     }
+    if !brain.status().available {
+        return Err("Your pet's mind isn't installed yet. Download it in Status > Privacy > Its mind.".into());
+    }
     if text.chars().count() > MAX_MESSAGE_CHARS {
         return Err(format!("Keep it under {MAX_MESSAGE_CHARS} characters."));
     }
@@ -635,7 +917,7 @@ async fn send_message(
     let plan = lock(&shared).begin_reply(&text)?;
     let reply = match plan {
         ReplyPlan::Direct(t) => t,
-        ReplyPlan::Model { system, history, user, stage, follow_up } => {
+        ReplyPlan::Model { system, history, user, stage, follow_up, fallback } => {
             emit_frame(&app, lock(&shared).thinking());
             let mut messages = vec![Message::new(Role::System, system)];
             for line in history {
@@ -664,6 +946,8 @@ async fn send_message(
                     None
                 }
             };
+            // Asked how it grew but the model had nothing: the real record answers.
+            let shaped = shaped.or_else(|| fallback.and_then(|f| lock(&shared).shape(&f, stage, &text)));
             // The pet's own question follows its answer; with nothing usable
             // to say, the question (or a word it knows) is the whole reply.
             match (shaped, follow_up) {
@@ -713,7 +997,7 @@ pub fn cli() -> Option<i32> {
         return Some(0);
     }
     let mut last = u64::MAX;
-    let result = netgate::download(model_url(size), &dest, || true, |done, total| {
+    let result = fetch_model(size, &dest, || true, |done, total| {
         let mb = |n: u64| n / 1_048_576;
         let step = total.map(|t| done * 20 / t.max(1)).unwrap_or(mb(done) / 100);
         if step != last {
@@ -732,13 +1016,15 @@ pub fn cli() -> Option<i32> {
             Some(0)
         }
         Err(e) => {
-            let _ = writeln!(out, "Could not download the language model: {e}");
-            Some(1)
+            let _ = writeln!(out, "Could not install the language model: {e}");
+            Some(e.code())
         }
     }
 }
 
 fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
+    // Thinking is heavy: it only gets spare CPU, at efficient clocks.
+    power_win::run_gently();
     let handle = app.handle().clone();
     let win = app.get_webview_window(PET).ok_or("pet window missing")?;
     let bounds = work_area(&win).ok_or("no monitor found")?;
@@ -747,9 +1033,20 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
     let size = rt.appearance().window_size();
     let shared: Shared = Arc::new(Mutex::new(rt));
     app.manage(shared.clone());
+    app.manage(Updates::default());
     resize_pet(&handle, &shared, size);
-    let size = lock(&shared).model_size().and_then(|k| ModelSize::from_key(&k)).unwrap_or(ModelSize::Light);
-    app.manage(Brain::start(data_dir.clone(), size));
+    // The user's own model choice, else the one the hardware profile suggests
+    // (the light model on low-end PCs).
+    let (chosen, tuning) = {
+        let rt = lock(&shared);
+        let tuning = rt.tuning();
+        (rt.model_size().and_then(|k| ModelSize::from_key(&k)).unwrap_or(tuning.model), tuning)
+    };
+    // Above other windows, unless the user would rather it sat on the desktop.
+    let _ = win.set_always_on_top(lock(&shared).comfort().on_top);
+    let brain = Brain::start(data_dir.clone(), chosen, brain_tuning(&tuning));
+    lock(&shared).set_mind_ready(brain.status().available);
+    app.manage(brain);
 
     let tray_menu = MenuBuilder::new(app)
         .item(&MenuItemBuilder::with_id("talk", "Talk").build(app)?)
@@ -769,6 +1066,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
         eprintln!("vpet: pixel menu unavailable: {e}");
     }
     spawn_audio_loop(handle.clone(), shared.clone());
+    spawn_update_checker(handle.clone(), shared.clone());
     let brain = handle.state::<Brain>().inner().clone();
     spawn_loop(handle, shared, win.clone(), brain);
     win.show()?;
@@ -777,7 +1075,7 @@ fn setup(app: &mut tauri::App) -> Result<(), Box<dyn std::error::Error>> {
 
 pub fn run() {
     let app = tauri::Builder::default()
-        .setup(setup)
+        .setup(|app| setup(app).map_err(|e| cannot_start(&e.to_string())))
         .on_menu_event(handle_menu)
         .invoke_handler(tauri::generate_handler![
             get_frame,
@@ -810,6 +1108,15 @@ pub fn run() {
             force_evolve,
             hide_menu,
             set_appearance,
+            get_hardware,
+            set_hardware_profile,
+            get_comfort,
+            set_comfort,
+            set_system_reduced_motion,
+            get_updates,
+            set_update_checks,
+            check_for_updates,
+            install_update,
         ])
         .build(tauri::generate_context!())
         .expect("failed to build VPet");
@@ -825,18 +1132,31 @@ pub fn run() {
 
 #[cfg(test)]
 mod tests {
+    fn rust_files(dir: &std::path::Path, out: &mut Vec<std::path::PathBuf>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                rust_files(&path, out);
+            } else if path.extension().is_some_and(|e| e == "rs") {
+                out.push(path);
+            }
+        }
+    }
+
     /// Network access must only ever happen inside netgate.rs.
     #[test]
     fn network_code_lives_only_in_the_gate() {
         let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        for entry in std::fs::read_dir(src).unwrap() {
-            let path = entry.unwrap().path();
-            let name = path.file_name().unwrap().to_string_lossy().to_string();
+        let mut files = Vec::new();
+        rust_files(&src, &mut files);
+        assert!(files.iter().any(|f| f.ends_with("runtime/mod.rs") || f.ends_with("runtime\\mod.rs")), "sub-folders are scanned too");
+        for path in files {
+            let name = path.strip_prefix(&src).unwrap().display().to_string();
             if name == "netgate.rs" || name == "lib.rs" {
                 continue;
             }
             let text = std::fs::read_to_string(&path).unwrap();
-            for needle in ["ureq", "reqwest", "TcpStream", "UdpSocket", "hyper::"] {
+            for needle in ["ureq", "reqwest", "TcpStream", "UdpSocket", "hyper::", "tauri_plugin_updater"] {
                 assert!(!text.contains(needle), "{name} uses {needle}: route it through netgate.rs");
             }
         }
@@ -848,5 +1168,18 @@ mod tests {
         let args = super::WEBVIEW_ARGS.replace('\n', " ");
         let args = args.split_whitespace().collect::<Vec<_>>().join(" ");
         assert!(conf.contains(&args), "tauri.conf.json additionalBrowserArgs must equal WEBVIEW_ARGS");
+    }
+
+    /// The installer, the updater and the UI each read a different file for
+    /// the version; a release with two numbers would update forever.
+    #[test]
+    fn every_version_number_agrees() {
+        let version = |text: &str| -> String {
+            let v: serde_json::Value = serde_json::from_str(text).unwrap();
+            v["version"].as_str().unwrap().to_string()
+        };
+        let app = super::updater::current_version();
+        assert_eq!(version(include_str!("../tauri.conf.json")), app, "tauri.conf.json: run `npm run version:set -- {app}`");
+        assert_eq!(version(include_str!("../../package.json")), app, "package.json: run `npm run version:set -- {app}`");
     }
 }

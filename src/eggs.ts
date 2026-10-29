@@ -3,6 +3,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import "./prefs";
 import { clickSounds, sfx } from "./sfx";
+import { ask } from "./ui";
+import { SIZE } from "./renderer/pixel";
 import { eggGrid, eggPalette } from "./renderer/sprite";
 import type { EggKind } from "./types";
 
@@ -25,18 +27,18 @@ let t = 0;
 function draw(canvas: HTMLCanvasElement, kind: EggKind, wobble: boolean): void {
   const ctx = canvas.getContext("2d")!;
   const img = eggGrid(kind, 0).toImageData(eggPalette(kind));
-  ctx.clearRect(0, 0, 64, 64);
-  ctx.putImageData(img, wobble ? [0, 1, 0, -1][t % 4] : 0, 0);
+  ctx.clearRect(0, 0, SIZE, SIZE);
+  ctx.putImageData(img, wobble ? [0, 2, 0, -2][t % 4] : 0, 0);
 }
 
 for (const [kind, name, hint] of EGGS) {
   const card = document.createElement("button");
   card.className = "egg-card";
   card.dataset.kind = kind;
-  card.innerHTML = `<canvas width="64" height="64"></canvas><span class="name">${name}</span><span class="hint">${hint}</span>`;
+  card.innerHTML = `<canvas width="${SIZE}" height="${SIZE}" aria-hidden="true"></canvas><span class="name">${name}</span><span class="hint">${hint}</span>`;
   list.appendChild(card);
   card.addEventListener("click", async () => {
-    if (!confirm(`Raise a creature from the ${name}? You can't change eggs later.`)) return;
+    if (!(await ask(`Raise a creature from the ${name}? You can't change eggs later.`, "Raise it", "Not yet"))) return;
     sfx.hatch();
     try {
       await invoke("choose_egg", { kind });

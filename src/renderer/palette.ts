@@ -32,12 +32,7 @@ export const METAL = 20;
 export const METAL_D = 21;
 export const METAL_OUT = 22;
 export const LED = 23;
-export const EGG = 24;
-export const EGG_SHADE = 25;
-export const EGG_SPOT = 26;
-export const EGG_ACC = 27;
-export const EGG_ACC_D = 28;
-export const EGG_OUT = 29;
+// 24-29 are free: eggs are painted in full colour (egg.ts).
 export const SHADOW = 30;
 export const ANGER = 31;
 export const SPARK = 32;
@@ -46,6 +41,20 @@ export const FIRE = 34;
 export const LEAF = 35;
 export const NORI = 36;
 export const GLOW = 37;
+// Evolved forms: gear, element energy and face details.
+export const CLOTH = 38;
+export const CLOTH_D = 39;
+export const GEAR_D = 40;
+export const GOLD = 41;
+export const GOLD_D = 42;
+export const GEM = 43;
+export const FLOWER = 44;
+export const FLOWER_C = 45;
+export const WIND = 46;
+export const BLUSH = 47;
+export const ENERGY = 48;
+export const ENERGY_L = 49;
+export const FLASH = 50;
 
 /** The darkest tone of the ramp a colour belongs to: what outlines it. */
 export function outlineOf(c: number): number {
@@ -60,31 +69,11 @@ export function outlineOf(c: number): number {
     case METAL_OUT:
     case LED:
       return METAL_OUT;
-    case EGG:
-    case EGG_SHADE:
-    case EGG_SPOT:
-    case EGG_ACC:
-    case EGG_ACC_D:
-    case EGG_OUT:
-      return EGG_OUT;
     default:
       return OUT;
   }
 }
 
-/** Shell colours per egg: base, shade, highlight, pattern, dark pattern. */
-const EGG_COLORS: Record<EggKind | "unknown", RGBA[]> = {
-  wind: [[150, 192, 236, 255], [98, 134, 204, 255], [216, 234, 250, 255], [236, 186, 40, 255], [180, 110, 20, 255]],
-  ember: [[240, 158, 70, 255], [204, 100, 36, 255], [252, 212, 150, 255], [150, 60, 20, 255], [100, 34, 12, 255]],
-  earth: [[226, 188, 128, 255], [182, 132, 76, 255], [246, 226, 180, 255], [120, 68, 32, 255], [80, 40, 18, 255]],
-  frost: [[224, 238, 246, 255], [176, 198, 216, 255], [250, 254, 255, 255], [236, 140, 160, 255], [180, 80, 110, 255]],
-  leaf: [[176, 214, 70, 255], [120, 166, 40, 255], [226, 244, 150, 255], [60, 120, 30, 255], [34, 80, 18, 255]],
-  tide: [[200, 110, 190, 255], [150, 66, 150, 255], [236, 180, 226, 255], [110, 70, 190, 255], [70, 40, 130, 255]],
-  dart: [[120, 104, 150, 255], [82, 68, 110, 255], [176, 162, 206, 255], [60, 44, 86, 255], [36, 26, 56, 255]],
-  light: [[250, 228, 150, 255], [214, 180, 96, 255], [255, 248, 216, 255], [244, 160, 60, 255], [190, 100, 30, 255]],
-  ghost: [[206, 226, 236, 255], [158, 184, 204, 255], [240, 250, 255, 255], [150, 120, 210, 255], [92, 70, 150, 255]],
-  unknown: [[196, 190, 206, 255], [150, 142, 166, 255], [228, 224, 236, 255], [110, 100, 130, 255], [70, 62, 90, 255]],
-};
 
 /** Moves hue `h` up to `amt` degrees towards `target`, the short way round. */
 function toward(h: number, target: number, amt: number): number {
@@ -101,7 +90,8 @@ function ramp(h: number, s: number, l: number): RGBA[] {
   const light = isWarm(h) ? 55 : 275;
   const lift = isWarm(h) ? 0.1 : 0.16;
   return [
-    hsl(toward(h, dark, 24), Math.min(1, s * 0.85 + 0.1), l * 0.34),
+    // The outline is a near-black ink, just tinted by the colour it bounds.
+    hsl(toward(h, dark, 30), Math.min(1, s * 0.6 + 0.2), Math.max(0.08, l * 0.17)),
     hsl(toward(h, dark, 15), Math.min(1, s * 0.92 + 0.05), l * 0.56),
     hsl(toward(h, dark, 7), s, l * 0.78),
     hsl(h, s, l),
@@ -124,8 +114,11 @@ export function palette(g: Genome): RGBA[] {
   p[BELLY] = hsl(toward(42, h, 8), 0.5, 0.72);
   p[BELLY_S] = hsl(toward(32, h, 8), 0.42, 0.56);
   p[EYE] = [22, 12, 16, 255];
-  // Eyes stand out against the body: teal-green on warm bodies, amber on cool ones.
-  p[IRIS] = hsl(isWarm(h) ? 150 : 42, 0.8, 0.45);
+  // Eyes stand out against the body: teal-green on warm bodies, amber on cool
+  // ones. An evolved pet keeps the eye colour it hatched with, whatever its
+  // body turns into.
+  const eyeHue = g.style?.eye_hue != null ? (((g.style.eye_hue * 360) % 360) + 360) % 360 : h;
+  p[IRIS] = hsl(isWarm(eyeHue) ? 150 : 42, 0.8, 0.45);
   p[WHITE] = [246, 238, 220, 255];
   p[MOUTH] = [150, 30, 44, 255];
   p[BEAK] = [244, 176, 36, 255];
@@ -135,11 +128,8 @@ export function palette(g: Genome): RGBA[] {
   // Robot parts: brushed steel with a glowing LED.
   p[METAL] = [184, 196, 210, 255];
   p[METAL_D] = [110, 122, 146, 255];
-  p[METAL_OUT] = [44, 48, 66, 255];
+  p[METAL_OUT] = [22, 24, 36, 255];
   p[LED] = [96, 236, 255, 255];
-  const egg = EGG_COLORS[g.egg ?? "unknown"];
-  [p[EGG], p[EGG_SHADE], p[EGG_SPOT], p[EGG_ACC], p[EGG_ACC_D]] = egg;
-  p[EGG_OUT] = [Math.round(egg[4][0] * 0.5), Math.round(egg[4][1] * 0.5), Math.round(egg[4][2] * 0.5), 255];
   p[SHADOW] = [0, 0, 0, 60];
   p[ANGER] = [220, 40, 40, 255];
   p[SPARK] = [248, 204, 30, 255];
@@ -148,8 +138,33 @@ export function palette(g: Genome): RGBA[] {
   p[LEAF] = [60, 170, 40, 255];
   p[NORI] = [30, 44, 30, 255];
   p[GLOW] = [96, 236, 255, 90];
+  // Gear is cloth in the pet's accent colour, with dark straps and gold.
+  p[CLOTH] = hsl(h2, Math.max(s, 0.55), 0.5);
+  p[CLOTH_D] = hsl(h2, Math.max(s, 0.55), 0.34);
+  p[GEAR_D] = [46, 42, 58, 255];
+  p[GOLD] = [248, 204, 60, 255];
+  p[GOLD_D] = [190, 128, 24, 255];
+  p[GEM] = [230, 60, 110, 255];
+  p[FLOWER] = [252, 170, 200, 255];
+  p[FLOWER_C] = [255, 236, 120, 255];
+  p[WIND] = [214, 246, 244, 220];
+  p[BLUSH] = [250, 130, 150, 200];
+  const energy = ELEMENT_COLORS[g.style?.element ?? "none"];
+  p[ENERGY] = energy[0];
+  p[ENERGY_L] = energy[1];
+  p[FLASH] = [255, 255, 255, 255];
   return p;
 }
+
+/** Each element's energy colour, and a lighter core. */
+const ELEMENT_COLORS: Record<string, [RGBA, RGBA]> = {
+  fire: [[244, 96, 30, 230], [255, 214, 90, 255]],
+  water: [[60, 150, 240, 220], [190, 230, 255, 255]],
+  wind: [[120, 220, 200, 200], [230, 255, 250, 255]],
+  electric: [[250, 210, 40, 235], [255, 250, 200, 255]],
+  nature: [[70, 180, 70, 225], [200, 250, 150, 255]],
+  none: [[200, 190, 255, 200], [255, 255, 255, 255]],
+};
 
 /** Colours for drawing a specific egg (the picker shows them all). */
 export function eggPalette(kind: EggKind | null): RGBA[] {

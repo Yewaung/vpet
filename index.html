@@ -7,8 +7,9 @@
     <link rel="stylesheet" href="/src/pet.css" />
   </head>
   <body>
-    <div id="bubble" hidden></div>
-    <div id="stage"></div>
+    <div id="bubble" role="status" aria-live="polite" hidden></div>
+    <div id="stage" role="img" aria-label="Your pet"></div>
+    <div id="warmth" class="bar" role="meter" aria-valuemin="0" aria-valuemax="100" hidden><div class="fill"></div></div>
     <div id="speed" class="pixel" hidden></div>
     <script type="module" src="/src/pet.ts"></script>
   </body>

@@ -17,7 +17,9 @@ lto = true
 codegen-units = 1
 strip = true
 opt-level = "s"
-panic = "abort"
+# Unwind (not abort): a fault in one thread or command must not close the
+# whole app; locks are recovered after a panic (see `lock` in lib.rs).
+panic = "unwind"
 
 # llama.cpp is unusably slow unoptimised; keep it fast in dev builds too.
 [profile.dev.package.llama-cpp-sys-2]

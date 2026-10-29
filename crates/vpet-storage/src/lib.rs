@@ -1,13 +1,18 @@
 //! Local SQLite persistence. All pet data lives in one file under the
-//! user's app-data directory; deleting that file deletes the pet.
+//! user's app-data directory; deleting that file (and its backups) deletes
+//! the pet. See `backup.rs` for how a damaged file is recovered.
+
+mod backup;
 
 use std::fmt;
 use std::path::Path;
 
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
-use vpet_core::memory::{DayLog, SHORT_TERM_RETENTION_DAYS};
+
+pub use backup::Recovery;
 use vpet_core::learning::InterestStat;
+use vpet_core::memory::{DayLog, SHORT_TERM_RETENTION_DAYS};
 use vpet_core::vocabulary::WordStat;
 use vpet_core::{
     behavior::BehaviorState, ActivitySession, AppCategory, ChatLine, EventRecord, Genome, Interests,
@@ -16,7 +21,15 @@ use vpet_core::{
 };
 
 /// Migrations run in order; the index + 1 is the schema version.
-const MIGRATIONS: &[&str] = &[include_str!("schema_v1.sql"), include_str!("schema_v2.sql"), include_str!("schema_v3.sql"), include_str!("schema_v4.sql"), include_str!("schema_v5.sql"), include_str!("schema_v6.sql")];
+const MIGRATIONS: &[&str] = &[
+    include_str!("schema_v1.sql"),
+    include_str!("schema_v2.sql"),
+    include_str!("schema_v3.sql"),
+    include_str!("schema_v4.sql"),
+    include_str!("schema_v5.sql"),
+    include_str!("schema_v6.sql"),
+    include_str!("schema_v7.sql"),
+];
 /// Raw events are a rolling window, not an archive.
 const MAX_EVENTS: i64 = 5000;
 /// Chat lines kept for context; older lines are dropped.
@@ -31,6 +44,9 @@ pub enum Error {
     Json(serde_json::Error),
     Io(std::io::Error),
     Corrupt(String),
+    /// Saved by a newer VPet (after going back to an older version). Never
+    /// damage: the save is left exactly as it is.
+    TooNew,
 }
 
 impl fmt::Display for Error {
@@ -40,6 +56,7 @@ impl fmt::Display for Error {
             Error::Json(e) => write!(f, "stored data is malformed: {e}"),
             Error::Io(e) => write!(f, "file error: {e}"),
             Error::Corrupt(m) => write!(f, "stored data is invalid: {m}"),
+            Error::TooNew => write!(f, "Your pet was saved by a newer version of VPet, so this older version can't open it. Install the latest version from https://github.com/Yewaung/vpet/releases. Your pet is safe and hasn't been changed."),
         }
     }
 }
@@ -73,13 +90,36 @@ pub struct StoredMemory {
     pub memory: Memory,
 }
 
-/// Care and lineage, stored together as `pet.life_json`.
+/// One retired pet in the family tree: (generation, name, final stage, egg kind).
+pub type Ancestor = (u32, Option<String>, String, Option<String>);
+
+/// One life-stage transition (spec §43).
+#[derive(Clone, Debug, PartialEq)]
+pub struct EvolutionRecord {
+    pub at_ms: i64,
+    /// The pet's genome generation after the change.
+    pub generation: u32,
+    pub from: LifeStage,
+    pub to: LifeStage,
+    pub changes: Vec<(String, f64)>,
+    /// The body it grew into (older records may not have it).
+    pub genome: Option<Genome>,
+    pub form_name: Option<String>,
+    pub description: Option<String>,
+    pub reasons: Vec<String>,
+}
+
+/// Care, lineage, mind and identity, stored together as `pet.life_json`.
 #[derive(serde::Serialize, serde::Deserialize, Default)]
 #[serde(default)]
 struct Life {
     care: vpet_core::care::Care,
     lineage: vpet_core::evolution::Lineage,
     mind: vpet_core::mind::Mind,
+    gender: Option<vpet_core::Gender>,
+    temper_lean: f64,
+    last_together_ms: i64,
+    last_ignored_ms: i64,
 }
 
 pub struct Storage {
@@ -87,10 +127,13 @@ pub struct Storage {
 }
 
 impl Storage {
+    /// Opens the database. With WAL and `synchronous = FULL` every committed
+    /// transaction survives a crash or power cut; a torn write can only lose
+    /// the transaction in flight, never corrupt what came before.
     pub fn open(path: &Path) -> Result<Self> {
         let conn = Connection::open(path)?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
-        conn.pragma_update(None, "synchronous", "NORMAL")?;
+        conn.pragma_update(None, "synchronous", "FULL")?;
         Self::init(conn)
     }
 
@@ -107,6 +150,9 @@ impl Storage {
 
     fn migrate(&mut self) -> Result<()> {
         let version: i64 = self.conn.query_row("PRAGMA user_version", [], |r| r.get(0))?;
+        if version > MIGRATIONS.len() as i64 {
+            return Err(Error::TooNew);
+        }
         for (i, sql) in MIGRATIONS.iter().enumerate().skip(version as usize) {
             let tx = self.conn.transaction()?;
             tx.execute_batch(sql)?;
@@ -116,8 +162,9 @@ impl Storage {
         Ok(())
     }
 
-    /// Deletes the database and its WAL side files. The connection must be
-    /// dropped first. Missing files are fine: the goal is that nothing remains.
+    /// Deletes the database, its WAL side files, its backups and any damaged
+    /// copies set aside by recovery. The connection must be dropped first.
+    /// Missing files are fine: the goal is that nothing remains.
     pub fn destroy(path: &Path) -> Result<()> {
         let mut paths = vec![path.to_path_buf()];
         for suffix in ["-wal", "-shm", "-journal"] {
@@ -125,6 +172,7 @@ impl Storage {
             p.push(suffix);
             paths.push(p.into());
         }
+        paths.extend(backup::side_files(path));
         for p in paths {
             match std::fs::remove_file(&p) {
                 Ok(()) => {}
@@ -227,12 +275,18 @@ impl Storage {
             goals: serde_json::from_str(&goals)?,
             watching: None,
             watch_secs: 0.0,
+            quiet: false,
+            hushed: false,
             user_name,
             curiosity: serde_json::from_str(&curiosity)?,
             stage_age_secs,
             care: life.care,
             lineage: life.lineage,
             mind: life.mind,
+            gender: life.gender,
+            temper_lean: life.temper_lean,
+            last_together_ms: life.last_together_ms,
+            last_ignored_ms: life.last_ignored_ms,
         }))
     }
 
@@ -321,7 +375,15 @@ impl Storage {
                 s.user_name,
                 serde_json::to_string(&s.curiosity)?,
                 s.stage_age_secs,
-                serde_json::to_string(&Life { care: s.care.clone(), lineage: s.lineage.clone(), mind: s.mind.clone() })?,
+                serde_json::to_string(&Life {
+                    care: s.care.clone(),
+                    lineage: s.lineage.clone(),
+                    mind: s.mind.clone(),
+                    gender: s.gender,
+                    temper_lean: s.temper_lean,
+                    last_together_ms: s.last_together_ms,
+                    last_ignored_ms: s.last_ignored_ms,
+                })?,
             ],
         )?;
         for (word, w) in &s.vocabulary.words {
@@ -369,28 +431,30 @@ impl Storage {
         Ok(())
     }
 
-    /// Persists a tick's events and memories; stage changes also enter the
-    /// evolution history.
-    pub fn record(&mut self, events: &[EventRecord], memories: &[Memory], generation: u32) -> Result<()> {
+    /// Persists a tick's events and memories. Stage changes also enter the
+    /// evolution history, with a snapshot of the body `pet` grew into.
+    pub fn record(&mut self, events: &[EventRecord], memories: &[Memory], pet: &PetState) -> Result<()> {
         if events.is_empty() && memories.is_empty() {
             return Ok(());
         }
+        let genome = serde_json::to_string(&pet.genome)?;
         let tx = self.conn.transaction()?;
         for e in events {
-            tx.execute(
-                "INSERT INTO events (at, name, payload_json) VALUES (?1, ?2, ?3)",
-                params![e.at_ms, e.event.name(), serde_json::to_string(&e.event)?],
-            )?;
+            tx.execute("INSERT INTO events (at, name, payload_json) VALUES (?1, ?2, ?3)", params![e.at_ms, e.event.name(), serde_json::to_string(&e.event)?])?;
+            let none: &[String] = &[];
             let stage_change = match &e.event {
-                PetEvent::StageChanged { from, to } => Some((from, to, "{}".to_string())),
-                PetEvent::Evolved { from, to, changes, .. } => Some((from, to, serde_json::to_string(changes)?)),
+                PetEvent::StageChanged { from, to } => Some((from, to, "[]".to_string(), None, None, none)),
+                PetEvent::Evolved { from, to, changes, form_name, description, reasons } => {
+                    Some((from, to, serde_json::to_string(changes)?, form_name.as_deref(), Some(description.as_str()), reasons.as_slice()))
+                }
                 _ => None,
             };
-            if let Some((from, to, changes)) = stage_change {
+            if let Some((from, to, changes, form_name, description, reasons)) = stage_change {
                 tx.execute(
-                    "INSERT INTO evolution (generation, from_stage, to_stage, genome_changes_json, at)
-                     VALUES (?1, ?2, ?3, ?4, ?5)",
-                    params![generation, from.key(), to.key(), changes, e.at_ms],
+                    "INSERT INTO evolution (generation, from_stage, to_stage, genome_changes_json, at,
+                                            genome_json, form_name, description, reasons_json)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    params![pet.generation, from.key(), to.key(), changes, e.at_ms, genome, form_name, description, serde_json::to_string(reasons)?],
                 )?;
             }
         }
@@ -471,8 +535,8 @@ impl Storage {
         self.save_pet(child)
     }
 
-    /// The family tree, oldest first: (generation, name, stage, egg kind).
-    pub fn ancestors(&self) -> Result<Vec<(u32, Option<String>, String, Option<String>)>> {
+    /// The family tree, oldest first.
+    pub fn ancestors(&self) -> Result<Vec<Ancestor>> {
         let mut stmt = self.conn.prepare("SELECT generation, name, stage, genome_json FROM ancestor ORDER BY id")?;
         let rows = stmt.query_map([], |r| Ok((r.get::<_, u32>(0)?, r.get::<_, Option<String>>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))?;
         let mut out = Vec::new();
@@ -494,20 +558,49 @@ impl Storage {
         Ok(self.recent_memories(limit)?.into_iter().map(|m| m.memory).collect())
     }
 
-    /// Most recent events, newest first. Unreadable rows are skipped.
-    /// Stage changes, oldest first: (time, from, to, gene changes).
-    pub fn evolution_history(&self) -> Result<Vec<(i64, String, String, Vec<(String, f64)>)>> {
-        let mut stmt = self.conn.prepare("SELECT at, from_stage, to_stage, genome_changes_json FROM evolution ORDER BY id")?;
-        let rows = stmt.query_map([], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))?;
+    /// Stage changes, oldest first. Rows with an unknown stage are skipped.
+    pub fn evolution_history(&self) -> Result<Vec<EvolutionRecord>> {
+        let mut stmt = self.conn.prepare(
+            "SELECT at, generation, from_stage, to_stage, genome_changes_json, genome_json, form_name, description, reasons_json
+             FROM evolution ORDER BY id",
+        )?;
+        let rows = stmt.query_map([], |r| {
+            Ok((
+                (r.get::<_, i64>(0)?, r.get::<_, u32>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?),
+                (r.get::<_, String>(4)?, r.get::<_, Option<String>>(5)?, r.get::<_, Option<String>>(6)?),
+                (r.get::<_, Option<String>>(7)?, r.get::<_, String>(8)?),
+            ))
+        })?;
         let mut out = Vec::new();
         for row in rows {
-            let (at, from, to, json) = row?;
-            let changes: Vec<vpet_core::evolution::GeneChange> = serde_json::from_str(&json).unwrap_or_default();
-            out.push((at, from, to, changes.into_iter().map(|c| (c.gene, c.delta)).collect()));
+            let ((at_ms, generation, from, to), (changes, genome, form_name), (description, reasons)) = row?;
+            let (Some(from), Some(to)) = (LifeStage::from_key(&from), LifeStage::from_key(&to)) else {
+                continue;
+            };
+            let changes: Vec<vpet_core::evolution::GeneChange> = serde_json::from_str(&changes).unwrap_or_default();
+            out.push(EvolutionRecord {
+                at_ms,
+                generation,
+                from,
+                to,
+                changes: changes.into_iter().map(|c| (c.gene, c.delta)).collect(),
+                genome: genome.and_then(|g| serde_json::from_str(&g).ok()),
+                form_name,
+                description,
+                reasons: serde_json::from_str(&reasons).unwrap_or_default(),
+            });
         }
         Ok(out)
     }
 
+    /// The genome the pet had in `generation`, if it was saved.
+    pub fn genome_at(&self, generation: u32) -> Result<Option<Genome>> {
+        let json: Option<String> =
+            self.conn.query_row("SELECT genome_json FROM creature_genome WHERE generation = ?1", [generation], |r| r.get(0)).optional()?;
+        Ok(json.and_then(|g| serde_json::from_str(&g).ok()))
+    }
+
+    /// Most recent events, newest first. Unreadable rows are skipped.
     pub fn recent_events(&self, limit: u32) -> Result<Vec<EventRecord>> {
         let mut stmt = self
             .conn
@@ -615,15 +708,7 @@ mod tests {
     use vpet_core::{Interaction, Pet, TickInput};
 
     fn input(now_ms: i64) -> TickInput {
-        TickInput {
-            now_ms,
-            dt_secs: 1.0,
-            time_scale: 1.0,
-            local_hour: 12,
-            local_day: 1,
-            near_cursor: false,
-            watching: None,
-        }
+        TickInput { now_ms, dt_secs: 1.0, time_scale: 1.0, local_hour: 12, local_day: 1, near_cursor: false, watching: None, quiet: false, user_idle_secs: 0.0, hushed: false }
     }
 
     #[test]
@@ -694,11 +779,8 @@ mod tests {
     #[test]
     fn recent_events_round_trip_newest_first() {
         let mut s = Storage::open_in_memory().unwrap();
-        let evs = vec![
-            EventRecord { at_ms: 1, event: PetEvent::Petted },
-            EventRecord { at_ms: 2, event: PetEvent::WordLearned { word: "hi".into() } },
-        ];
-        s.record(&evs, &[], 1).unwrap();
+        let evs = vec![EventRecord { at_ms: 1, event: PetEvent::Petted }, EventRecord { at_ms: 2, event: PetEvent::WordLearned { word: "hi".into() } }];
+        s.record(&evs, &[], &PetState::new_egg(0, 1)).unwrap();
         let back = s.recent_events(10).unwrap();
         assert_eq!(back[0], evs[1]);
         assert_eq!(back[1], evs[0]);
@@ -719,23 +801,48 @@ mod tests {
         let mut pet = Pet::new(PetState::new_egg_of(vpet_core::EggKind::Earth, 0, 1), Vec::new());
         pet.state.incubation = 1.0;
         let out = pet.tick(&input(1000));
-        s.record(&out.events, &out.memories, pet.state.generation).unwrap();
+        s.record(&out.events, &out.memories, &pet.state).unwrap();
         assert_eq!(s.count("evolution").unwrap(), 1);
+        let hatch = &s.evolution_history().unwrap()[0];
+        assert_eq!((hatch.from, hatch.to), (LifeStage::Egg, LifeStage::Baby));
+        assert_eq!(hatch.genome.as_ref(), Some(&pet.state.genome), "it keeps the body it grew into, for portraits");
         assert!(s.memory_tags().unwrap().contains(&"first:hatch".to_string()));
         assert_eq!(s.recent_memories(10).unwrap()[0].memory.importance, 5);
     }
 
     #[test]
+    fn evolutions_keep_their_form_story_and_reasons() {
+        let mut s = Storage::open_in_memory().unwrap();
+        let mut pet = PetState::new_egg_of(vpet_core::EggKind::Wind, 0, 3);
+        pet.generation = 2;
+        let evolved = EventRecord {
+            at_ms: 9,
+            event: PetEvent::Evolved {
+                from: LifeStage::Child,
+                to: LifeStage::Rookie,
+                description: "I chased the wind.".into(),
+                changes: vec![vpet_core::evolution::GeneChange { gene: "features.horns".into(), delta: 0.1 }],
+                form_name: Some("Breezle".into()),
+                reasons: vec!["Horns grew because I've grown brave.".into()],
+            },
+        };
+        s.record(&[evolved], &[], &pet).unwrap();
+        s.save_pet(&pet).unwrap();
+        let r = &s.evolution_history().unwrap()[0];
+        assert_eq!(r.generation, 2);
+        assert_eq!(r.form_name.as_deref(), Some("Breezle"));
+        assert_eq!(r.description.as_deref(), Some("I chased the wind."));
+        assert_eq!(r.reasons, vec!["Horns grew because I've grown brave.".to_string()]);
+        assert_eq!(r.changes, vec![("features.horns".to_string(), 0.1)]);
+        assert_eq!(s.genome_at(2).unwrap(), Some(pet.genome.clone()));
+        assert_eq!(s.genome_at(9).unwrap(), None);
+    }
+
+    #[test]
     fn prune_forgets_old_trivia_but_keeps_important_memories() {
         let mut s = Storage::open_in_memory().unwrap();
-        let mk = |importance, tag: &str| Memory {
-            kind: MemoryKind::Episodic,
-            tag: tag.into(),
-            summary: "x".into(),
-            importance,
-            created_at_ms: 0,
-        };
-        s.record(&[], &[mk(2, "trivia"), mk(5, "major")], 0).unwrap();
+        let mk = |importance, tag: &str| Memory { kind: MemoryKind::Episodic, tag: tag.into(), summary: "x".into(), importance, created_at_ms: 0 };
+        s.record(&[], &[mk(2, "trivia"), mk(5, "major")], &PetState::new_egg(0, 1)).unwrap();
         s.prune(30 * DAY_MS).unwrap();
         assert_eq!(s.memory_tags().unwrap(), vec!["major".to_string()]);
     }

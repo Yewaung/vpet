@@ -19,9 +19,9 @@ pub fn language_stage(stage: LifeStage, known_words: usize, conversations: u32, 
     let grown = |s: LifeStage| stage as u8 >= s as u8;
     if stage == LifeStage::Egg {
         0
-    } else if known_words >= 150 && conversations >= 50 && grown(LifeStage::Young) {
+    } else if known_words >= 150 && conversations >= 50 && grown(LifeStage::Rookie) {
         5
-    } else if known_words >= 60 && conversations >= 20 && grown(LifeStage::Developing) {
+    } else if known_words >= 60 && conversations >= 20 && grown(LifeStage::Child) {
         4
     } else if known_words >= 20 && conversations >= 5 && age_hours >= 24.0 {
         3
@@ -88,9 +88,59 @@ pub enum ReplyPlan {
     /// Answered by the simulation alone (egg, sounds, single words).
     Direct(String),
     /// Ask the LLM, then pass its output through [`shape_reply`] and add
-    /// `follow_up` (a question the pet itself wants to ask).
-    Model { system: String, history: Vec<ChatLine>, user: String, stage: u8, follow_up: Option<String> },
+    /// `follow_up` (a question the pet itself wants to ask). If the model
+    /// can't answer, `fallback` (when set) is shaped instead.
+    Model { system: String, history: Vec<ChatLine>, user: String, stage: u8, follow_up: Option<String>, fallback: Option<String> },
 }
+
+/// Everything a reply may draw on besides the pet itself.
+pub struct ReplyInput<'a> {
+    pub user: &'a str,
+    pub history: &'a [ChatLine],
+    pub memories: &'a [&'a Memory],
+    pub interests: &'a [String],
+    pub likely_activity: Option<(AppCategory, f64)>,
+    /// Something it just learned from the user's answer.
+    pub note: Option<String>,
+}
+
+/// Words that ask about the pet's growth or its new body.
+const GROWTH_WORDS: &[&str] = &["evolve", "evolved", "evolving", "evolution", "grew", "grown"];
+const BODY_WORDS: &[&str] = &["wings", "horn", "horns", "tail", "claws", "spots", "glow", "markings", "shell", "spikes", "mane", "form", "body"];
+
+/// Is the user asking how or why the pet changed?
+pub fn asks_about_growth(text: &str) -> bool {
+    let words = tokenize(text);
+    let has = |list: &[&str]| words.iter().any(|w| list.contains(&w.as_str()));
+    let asking = text.contains('?') || words.iter().any(|w| matches!(w.as_str(), "why" | "how" | "what" | "tell"));
+    has(GROWTH_WORDS) || (asking && has(BODY_WORDS)) || text.to_ascii_lowercase().contains("look different")
+}
+
+/// The pet's own account of its latest evolution, built only from what
+/// really changed and why (spec §44). `full` answers a question; otherwise
+/// it's the one line it says on its own after growing.
+pub fn explain_growth(g: &crate::mind::GrowthNote, full: bool) -> String {
+    let first = g.reasons.first().cloned().unwrap_or_else(|| g.what.clone());
+    if !full {
+        return format!("Look at me! {first}");
+    }
+    let mut out = format!("I grew from a {} creature into a {} one", g.from.key(), g.to.key());
+    match &g.form_name {
+        Some(name) => out.push_str(&format!(", and I call this form {name}. ")),
+        None => out.push_str(". "),
+    }
+    if g.reasons.is_empty() {
+        out.push_str(&g.what);
+        out.push_str(" I'm not sure why yet.");
+    } else {
+        out.push_str(&g.reasons.join(" "));
+    }
+    out
+}
+
+/// Tells the model how the user's question relates to its real growth.
+const GROWTH_QUESTION_NOTE: &str = "The user is asking about how you grew. Answer using ONLY the changes and reasons listed under \
+     \"How you last grew\"; never give any other cause.";
 
 /// Detects the user naming the pet: "I call you Kiba", "your name is Kiba".
 pub fn detect_name(text: &str) -> Option<String> {
@@ -211,6 +261,9 @@ pub fn system_prompt(
          You are the user's pet, not an assistant. Speak in first person as the pet. \
          Never mention being an AI, a model or a program. Never use emoji.\n",
     );
+    // Its mind grows with it: what it knows and how it thinks (see `maturity`).
+    p.push_str(&crate::maturity::mind_block(s));
+    p.push('\n');
     p.push_str(&stage_rules(stage, &s.vocabulary));
     match s.name.as_deref() {
         Some(name) => p.push_str(&format!("\nYour name is {name}; the user gave it to you.")),
@@ -224,14 +277,19 @@ pub fn system_prompt(
     if let Some(form) = &s.mind.form {
         p.push_str(&format!("\nYour current form is called {}: {}", form.name, form.story));
     }
+    if let Some(g) = &s.mind.growth {
+        p.push_str(&format!(
+            "\nHow you last grew (true, from your own life; these are the ONLY real reasons): you grew from a {} creature into a {} one. {}",
+            g.from.key(),
+            g.to.key(),
+            g.what
+        ));
+        for r in &g.reasons {
+            p.push_str(&format!("\n- {r}"));
+        }
+    }
     if let Some(plan) = &s.mind.plan {
         p.push_str(&format!("\nToday you feel {}.", plan.mood.key()));
-    }
-    if !s.mind.beliefs.is_empty() {
-        p.push_str("\nWhat you have come to believe (your own conclusions from your memories; you could be wrong):");
-        for b in s.mind.beliefs.iter().take(5) {
-            p.push_str(&format!("\n- {}", b.text));
-        }
     }
     if let Some(g) = &s.goals.current {
         p.push_str(&format!("\nYour own goal right now: you want to {}.", g.kind.phrase()));
@@ -283,18 +341,9 @@ pub fn answer_note(q: &Question, learned: &Learned, stage: u8) -> String {
     }
 }
 
-/// Decides how to answer `user` given the pet's development.
-pub fn plan_reply(
-    s: &PetState,
-    stage: u8,
-    user: &str,
-    history: &[ChatLine],
-    memories: &[&Memory],
-    interests: &[String],
-    likely_activity: Option<(AppCategory, f64)>,
-    note: Option<String>,
-    rng: &mut Rng,
-) -> ReplyPlan {
+/// Decides how to answer the user given the pet's development.
+pub fn plan_reply(s: &PetState, stage: u8, input: ReplyInput, rng: &mut Rng) -> ReplyPlan {
+    let user = input.user;
     match stage {
         0 => ReplyPlan::Direct("...".into()),
         1 => {
@@ -321,13 +370,29 @@ pub fn plan_reply(
             };
             ReplyPlan::Direct(text)
         }
-        _ => ReplyPlan::Model {
-            system: system_prompt(s, stage, memories, interests, likely_activity, note.as_deref()),
-            history: history.iter().rev().take(8).rev().cloned().collect(),
-            user: user.to_string(),
-            stage,
-            follow_up: None,
-        },
+        _ => {
+            // Asked how it grew: at full speech it answers from the real
+            // record itself, so no cause can be invented (spec §44).
+            let growth = s.mind.growth.as_ref().filter(|_| asks_about_growth(user));
+            if let Some(g) = growth.filter(|_| stage >= 5) {
+                if let Some(text) = shape_reply(&explain_growth(g, true), stage, &s.vocabulary, user, &[], s.name.as_deref()) {
+                    return ReplyPlan::Direct(text);
+                }
+            }
+            let note = match (input.note, growth) {
+                (Some(n), Some(_)) => Some(format!("{n}\n{GROWTH_QUESTION_NOTE}")),
+                (None, Some(_)) => Some(GROWTH_QUESTION_NOTE.to_string()),
+                (n, None) => n,
+            };
+            ReplyPlan::Model {
+                system: system_prompt(s, stage, input.memories, input.interests, input.likely_activity, note.as_deref()),
+                history: input.history.iter().rev().take(8).rev().cloned().collect(),
+                user: user.to_string(),
+                stage,
+                follow_up: None,
+                fallback: growth.map(|g| explain_growth(g, false)),
+            }
+        }
     }
 }
 
@@ -461,6 +526,56 @@ mod tests {
         v
     }
 
+    fn reply_input(user: &str) -> ReplyInput<'_> {
+        ReplyInput { user, history: &[], memories: &[], interests: &[], likely_activity: None, note: None }
+    }
+
+    fn grown_pet(stage: u8) -> PetState {
+        let mut s = PetState::new_egg(0, 1);
+        s.stage = LifeStage::Rookie;
+        s.language_stage = stage;
+        s.mind.growth = Some(crate::mind::GrowthNote {
+            from: LifeStage::Child,
+            to: LifeStage::Rookie,
+            form_name: Some("Breezle".into()),
+            story: None,
+            what: "Horns grew and my tail got longer.".into(),
+            reasons: vec!["Horns grew because I've grown brave.".into()],
+            at_ms: 0,
+            told: false,
+        });
+        s
+    }
+
+    #[test]
+    fn recognises_questions_about_its_growth() {
+        assert!(asks_about_growth("Why did you evolve?"));
+        assert!(asks_about_growth("how did you get those horns?"));
+        assert!(asks_about_growth("You look different today"));
+        assert!(!asks_about_growth("I like your tail"), "a remark, not a question");
+        assert!(!asks_about_growth("Are you hungry?"));
+    }
+
+    #[test]
+    fn a_fluent_pet_explains_its_growth_only_from_real_reasons() {
+        let s = grown_pet(5);
+        let ReplyPlan::Direct(t) = plan_reply(&s, 5, reply_input("Why did you evolve?"), &mut Rng::new(1)) else {
+            panic!("fluent pets answer from the record itself");
+        };
+        assert!(t.contains("Breezle") && t.contains("because I've grown brave"), "{t}");
+    }
+
+    #[test]
+    fn a_young_speaker_gets_the_real_reasons_and_a_fallback() {
+        let s = grown_pet(4);
+        let ReplyPlan::Model { system, fallback, .. } = plan_reply(&s, 4, reply_input("why do you have horns?"), &mut Rng::new(1)) else {
+            panic!();
+        };
+        assert!(system.contains("How you last grew") && system.contains("because I've grown brave"));
+        assert!(system.contains("never give any other cause"));
+        assert_eq!(fallback.as_deref(), Some("Look at me! Horns grew because I've grown brave."));
+    }
+
     #[test]
     fn language_unlocks_gradually() {
         assert_eq!(language_stage(LifeStage::Egg, 999, 999, 999.0), 0);
@@ -469,7 +584,7 @@ mod tests {
         assert_eq!(language_stage(LifeStage::Baby, 25, 10, 2.0), 2, "too young for phrases");
         assert_eq!(language_stage(LifeStage::Baby, 25, 10, 30.0), 3);
         assert_eq!(language_stage(LifeStage::Baby, 500, 500, 500.0), 3, "baby body caps language");
-        assert_eq!(language_stage(LifeStage::Young, 500, 500, 500.0), 5);
+        assert_eq!(language_stage(LifeStage::Rookie, 500, 500, 500.0), 5);
     }
 
     #[test]
@@ -499,11 +614,9 @@ mod tests {
         let mut s = PetState::new_egg(0, 1);
         s.stage = LifeStage::Baby;
         s.vocabulary = vocab(&["hi"]);
-        let plan = plan_reply(&s, 1, "hi there, tell me about your day", &[], &[], &[], None, None, &mut Rng::new(1));
+        let plan = plan_reply(&s, 1, reply_input("hi there, tell me about your day"), &mut Rng::new(1));
         assert_eq!(plan, ReplyPlan::Direct("Hi!".into()));
-        let ReplyPlan::Direct(t) = plan_reply(&s, 1, "what are you doing?", &[], &[], &[], None, None, &mut Rng::new(1)) else {
-            panic!()
-        };
+        let ReplyPlan::Direct(t) = plan_reply(&s, 1, reply_input("what are you doing?"), &mut Rng::new(1)) else { panic!() };
         assert!(SOUNDS.contains(&t.as_str()));
     }
 
@@ -563,14 +676,14 @@ mod tests {
         let mut s = PetState::new_egg(0, 1);
         s.stage = LifeStage::Baby;
         s.vocabulary = vocab(&["food", "game"]);
-        let plan = plan_reply(&s, 2, "Want some food?", &[], &[], &[], None, None, &mut Rng::new(1));
+        let plan = plan_reply(&s, 2, reply_input("Want some food?"), &mut Rng::new(1));
         assert_eq!(plan, ReplyPlan::Direct("Food!".into()));
     }
 
     #[test]
     fn prompt_contains_only_given_memories_and_hedged_interests() {
         let mut s = PetState::new_egg(0, 1);
-        s.stage = LifeStage::Young;
+        s.stage = LifeStage::Rookie;
         let m = Memory {
             kind: MemoryKind::Episodic,
             tag: "first:hatch".into(),
