@@ -28,7 +28,7 @@ serde_json.workspace = true
 ureq = "3"
 chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # Update installers are only run if their signature verifies (updater.rs).
-minisign-verify = "0.2.5"
+minisign-verify = "0.3.0"
 # Checks downloaded language models against their published SHA-256 (brain.rs).
 sha2 = "0.10"
 base64 = "0.23.1"
