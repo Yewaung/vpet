@@ -4,7 +4,7 @@ What changed in each VPet release. The newest version is at the top. The release
 
 Versions follow [semantic versioning](https://semver.org/): while VPet is 0.x, the minor number (0.**2**.0) brings new features and the patch number (0.1.**1**) brings fixes only. A save from any earlier version always loads.
 
-## [0.1.0] - Unreleased
+## [0.1.0] - 2026-10-29
 
 The first public version.
 

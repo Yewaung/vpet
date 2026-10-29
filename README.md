@@ -199,3 +199,7 @@ npm run version:set -- 0.2.0               # set the version everywhere before a
 - **Localization:** see [docs/LOCALIZATION.md](docs/LOCALIZATION.md).
 
 See [ROADMAP.md](ROADMAP.md) and `overview.md` §71–72.
+
+## Licence
+
+Copyright (c) 2026 Ye W Aung. All rights reserved: the app is free to use, and the source is public to read but not to copy or redistribute. See [LICENSE](LICENSE). Third-party components keep their own licences ([THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)).

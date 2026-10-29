@@ -7,7 +7,7 @@ Releases are built by `.github/workflows/release.yml` when a `v*` tag is pushed.
 Do these in order. Steps 1 and 2 can't be fixed afterwards: whatever key and uninstaller v0.1.0 ships with is what every installed copy uses to update itself.
 
 1. **Make the update-signing key** and add it to the repository (see [Update signing](#2-update-signing-lets-the-in-app-updater-install-releases)). A v0.1.0 built without it can never install an update itself; its users would have to download every new version by hand.
-2. **Decide the licence.** `tauri.conf.json` says "All rights reserved" and the repository has no LICENSE file, but the repository is public. Pick one (a closed licence, MIT, GPL…) before people download it.
+2. **The licence** is decided: all rights reserved ([LICENSE](../LICENSE)). Opening it up later is possible; an open licence can't be taken back for versions already out.
 3. **Optional but recommended: code signing** (see [Code signing](#1-code-signing-removes-the-smartscreen-warning)). Without it, Windows shows "Windows protected your PC" and the user must press *More info > Run anyway*. It can be added in any later release.
 4. **Commit and push everything** to `main`, including `.github/workflows` (the first push didn't include them, so CI has never run). Wait for CI to pass.
 5. **Run the [QA checklist](#qa-before-announcing)** on the build from CI, or on a local `npm run tauri build`.
